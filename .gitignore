@@ -4,3 +4,6 @@ __pycache__/
 .pytest_cache/
 .venv/
 *.egg-info/
+
+# Claude Code 워크스페이스 메타 (워크트리·로컬 skills 캐시)
+.claude/
