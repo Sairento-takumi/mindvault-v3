@@ -19,6 +19,11 @@ from pathlib import Path
 PROJECTS_DIR = Path("/Users/yonghaekim/.claude/projects/-Users-yonghaekim-my-folder")
 MEMORY_DIR = PROJECTS_DIR / "memory"
 STAGED_DIR = MEMORY_DIR / "_staged"
+# Sprint 13: procedural slot 분리. list/approve/reject/prune 모두 양쪽 staged
+# 디렉토리 스캔. promoted target 은 type 별로 분기 (procedural → PROCEDURAL_DIR).
+PROCEDURAL_DIR = MEMORY_DIR / "_procedural"
+PROCEDURAL_STAGED_DIR = PROCEDURAL_DIR / "_staged"
+STAGED_DIRS = (STAGED_DIR, PROCEDURAL_STAGED_DIR)
 INDEX_MD = MEMORY_DIR / "MEMORY.md"
 DEBUG_LOG = Path("/Users/yonghaekim/.claude/mindvault-v2/debug.log")
 STAGED_TTL_DAYS = 30
@@ -49,13 +54,20 @@ def parse_frontmatter(text: str) -> tuple[dict, str]:
     return meta, body
 
 
+def _iter_staged_files():
+    """양쪽 staged 디렉토리에서 .md 순회. 시간 안정 정렬."""
+    files: list[Path] = []
+    for d in STAGED_DIRS:
+        if d.is_dir():
+            files.extend(d.glob("*.md"))
+    files.sort(key=lambda p: p.name)
+    return files
+
+
 def cmd_list() -> int:
-    if not STAGED_DIR.is_dir():
-        sys.stdout.write(json.dumps({"staged": []}, ensure_ascii=False))
-        return 0
     items = []
     now = time.time()
-    for f in sorted(STAGED_DIR.glob("*.md")):
+    for f in _iter_staged_files():
         try:
             text = f.read_text(encoding="utf-8")
             meta, body = parse_frontmatter(text)
@@ -86,10 +98,25 @@ def _promoted_slug(staged_name: str) -> str:
 
 
 def _safe_staged_path(filename: str) -> Path | None:
-    """filename이 STAGED_DIR 내부의 단일 md 파일인지 검증. path traversal 차단."""
+    """filename이 STAGED_DIRS 중 하나 안의 단일 md 파일인지 검증. path traversal 차단.
+
+    Sprint 13: 양쪽 staged 슬롯 lookup. 동일 filename 이 양쪽에 있을 일은 없지만
+    (slugify 결과 + timestamp 결합 → 충돌 가능성 무시), 둘 다 있으면 결정 슬롯 우선.
+    """
     if not filename or filename != Path(filename).name or not filename.endswith(".md"):
         return None
-    return STAGED_DIR / filename
+    for d in STAGED_DIRS:
+        p = d / filename
+        if p.is_file():
+            return p
+    return None
+
+
+def _promote_target_dir(meta_type: str) -> Path:
+    """type 별 promote 대상 디렉토리. procedural 만 _procedural/, 그 외 root."""
+    if meta_type == "procedural":
+        return PROCEDURAL_DIR
+    return MEMORY_DIR
 
 
 def cmd_approve(filename: str) -> int:
@@ -104,7 +131,10 @@ def cmd_approve(filename: str) -> int:
         text = src.read_text(encoding="utf-8")
         meta, body = parse_frontmatter(text)
         slug = _promoted_slug(filename)
-        target = MEMORY_DIR / f"{slug}.md"
+        meta_type = meta.get("type", "feedback")
+        target_dir = _promote_target_dir(meta_type)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = target_dir / f"{slug}.md"
         if target.exists():
             sys.stdout.write(json.dumps({"ok": False, "error": "target exists", "target": str(target)}))
             return 0
@@ -113,7 +143,7 @@ def cmd_approve(filename: str) -> int:
             "---\n"
             f"name: {meta.get('name', slug)}\n"
             f"description: {meta.get('description', meta.get('name', slug))}\n"
-            f"type: {meta.get('type', 'feedback')}\n"
+            f"type: {meta_type}\n"
             "---\n\n"
             f"{body.rstrip()}\n"
         )
@@ -166,18 +196,18 @@ def cmd_reject(filename: str) -> int:
 
 
 def cmd_prune() -> int:
-    if not STAGED_DIR.is_dir():
-        sys.stdout.write(json.dumps({"removed": 0}))
-        return 0
     cutoff = time.time() - STAGED_TTL_DAYS * 86400
     removed = 0
-    for f in STAGED_DIR.glob("*.md"):
-        try:
-            if f.stat().st_mtime < cutoff:
-                f.unlink()
-                removed += 1
-        except OSError:
+    for d in STAGED_DIRS:
+        if not d.is_dir():
             continue
+        for f in d.glob("*.md"):
+            try:
+                if f.stat().st_mtime < cutoff:
+                    f.unlink()
+                    removed += 1
+            except OSError:
+                continue
     sys.stdout.write(json.dumps({"removed": removed}))
     return 0
 

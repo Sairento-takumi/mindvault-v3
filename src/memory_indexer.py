@@ -194,13 +194,28 @@ def _safe_memory_path(path: Path, allowed_roots: list[Path]) -> bool:
     return False
 
 
+PROCEDURAL_SUBDIR = "_procedural"
+# Sprint 13: 절차적 메모리(명령어 syntax·workflow·환경 설정)는 결정 메모리와
+# 분리해 `_procedural/` 하위 디렉토리에 저장. 디렉토리 단위 분리로 grep·인벤토리·
+# 백업이 단순해진다. 회수 시점에는 동일 게이트로 검색 — type 분리는 저장 슬롯의
+# 의미만 가지고, 검색 우선순위는 raw cosine 그대로 따른다.
+
+
 def _collect_md_files(dirs: list[Path]) -> list[Path]:
-    """memory/ 디렉토리에서 .md 수집. _staged/, MEMORY.md(index 파일), symlink outside 제외."""
+    """memory/ 디렉토리에서 .md 수집. _staged/, MEMORY.md(index 파일), symlink outside 제외.
+
+    Sprint 13: root 직속 + `_procedural/` 하위까지 수집. `_procedural/_staged/` 는
+    `_staged` 부분 일치로 제외.
+    """
     out: list[Path] = []
     for d in dirs:
         if not d.is_dir():
             continue
-        for p in d.glob("*.md"):
+        candidates: list[Path] = list(d.glob("*.md"))
+        proc_dir = d / PROCEDURAL_SUBDIR
+        if proc_dir.is_dir():
+            candidates.extend(proc_dir.glob("*.md"))
+        for p in candidates:
             if any(part == "_staged" for part in p.parts):
                 continue
             if p.name == "MEMORY.md":

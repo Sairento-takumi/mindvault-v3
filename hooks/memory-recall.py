@@ -80,6 +80,14 @@ def _mtime_changed() -> bool:
             for p in d.glob("*.md"):
                 if p.stat().st_mtime > db_mt:
                     return True
+            # Sprint 13: _procedural/ 하위 .md 변경도 reindex trigger
+            proc = d / "_procedural"
+            if proc.is_dir():
+                if proc.stat().st_mtime > db_mt:
+                    return True
+                for p in proc.glob("*.md"):
+                    if p.stat().st_mtime > db_mt:
+                        return True
         except OSError:
             continue
     return False

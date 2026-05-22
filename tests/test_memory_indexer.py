@@ -169,6 +169,40 @@ class TestIncrementalIndex(unittest.TestCase):
             result = incremental_index([self.fixture_dir], db_path=self.tmp_db)
         self.assertEqual(result["updated"], 3)
 
+    def test_procedural_subdir_indexed(self):
+        """Sprint 13: _procedural/ 하위 .md 는 root 직속과 함께 인덱싱."""
+        from memory_indexer import incremental_index
+        proc = self.fixture_dir / "_procedural"
+        proc.mkdir()
+        (proc / "claude_bg_syntax.md").write_text(
+            "---\nname: claude-bg-syntax\ndescription: claude --bg background session\n"
+            "type: procedural\n---\n`claude --bg \"prompt\"` 백그라운드 세션 시작."
+        )
+        with patch("memory_indexer.embed_text", side_effect=_fake_embed):
+            result = incremental_index([self.fixture_dir], db_path=self.tmp_db)
+        self.assertEqual(result["updated"], 4)  # fixture 3 + procedural 1
+        conn = sqlite3.connect(str(self.tmp_db))
+        try:
+            paths = [r[0] for r in conn.execute("SELECT path FROM memories")]
+        finally:
+            conn.close()
+        self.assertTrue(
+            any("_procedural" in p and "claude_bg_syntax" in p for p in paths),
+            f"procedural memory not indexed: {paths}",
+        )
+
+    def test_procedural_staged_excluded(self):
+        """Sprint 13: _procedural/_staged/ 도 _staged part 일치로 제외."""
+        from memory_indexer import incremental_index
+        proc_staged = self.fixture_dir / "_procedural" / "_staged"
+        proc_staged.mkdir(parents=True)
+        (proc_staged / "20260523-010101_procedural_test.md").write_text(
+            "---\nname: stage-test\ndescription: skip\ntype: procedural\n---\nstaged"
+        )
+        with patch("memory_indexer.embed_text", side_effect=_fake_embed):
+            result = incremental_index([self.fixture_dir], db_path=self.tmp_db)
+        self.assertEqual(result["updated"], 3)  # _staged 제외, fixture 3개만
+
 
 class TestPathSafety(unittest.TestCase):
     def test_symlink_outside_root_rejected(self):

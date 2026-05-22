@@ -19,11 +19,19 @@ GEMMA_MODEL = "mlx-community/gemma-4-e4b-it-4bit"
 GEMMA_TIMEOUT = 45
 MAX_BODY_CHARS = 200
 MAX_TITLE_CHARS = 50
-VALID_TYPES = ("feedback", "project")
+# Sprint 13: procedural type 추가 — 명령어 syntax·workflow·환경 설정.
+# 새 trigger 그룹으로 신호 받아 Gemma 가 type=procedural 후보 생성하면
+# session_memory_end 가 _procedural/_staged/ 슬롯에 저장.
+VALID_TYPES = ("feedback", "project", "procedural")
 
 TRIGGER_RE = re.compile(
     r"(기억해|잊지\s?마|잊지말아|결정[:：]|정했[어다]|앞으로는|다음부턴|"
-    r"이 프로젝트는|원칙[:：]|규칙[:：])"
+    r"이 프로젝트는|원칙[:：]|규칙[:：]|"
+    # Sprint 13 procedural triggers — 명령어·문법·workflow·환경설정 자동 추출
+    r"이 명령어|이 명령은|이렇게\s?(?:쓰면|하면|입력하면|실행하면)|"
+    r"syntax|문법|이\s?(?:패턴|workflow|플로우|순서|절차)는?|"
+    r"외워둬|기억해둬|반복(?:해서|적으로)\s?(?:쓰|할|사용|실행)|"
+    r"환경설정|환경\s?변수|셋업|setup|이\s?(?:flag|옵션|플래그))"
 )
 
 SECRET_PATTERNS = [
@@ -145,8 +153,13 @@ def build_prompt(messages: list[dict]) -> str:
         "아래는 Claude Code 세션 대화 마지막 부분이다. 사용자가 '영구 기억'으로 남기려고 한 "
         "사실만 추출하라. 주관적 의견·일회성 대화·진행 보고는 제외.\n\n"
         "출력은 JSON 배열만. 각 항목 형식:\n"
-        '{"type":"feedback|project","title":"한 줄 50자 이내","body":"본문 200자 이내",'
+        '{"type":"feedback|project|procedural","title":"한 줄 50자 이내","body":"본문 200자 이내",'
         '"reason":"저장 이유 10자 이내","evidence":"원문 인용 30자"}\n\n'
+        "type 가이드:\n"
+        "- feedback: 사용자의 작업 방식·선호·금지사항 (예: '커밋 분리해라', '머지 직접 금지')\n"
+        "- project: 프로젝트 상태·결정·인물·외부 자원 (예: 'X 출시 2026-05', '책임자 Y')\n"
+        "- procedural: 명령어·syntax·workflow·환경 설정. body 는 실행 예시 1줄 + 한 줄 설명.\n"
+        "  예: body='claude --bg \"prompt\" # 백그라운드 세션 시작. 결과는 jobs 디렉토리에 저장.'\n\n"
         "후보가 없으면 빈 배열 []. 해설·마크다운 코드펜스 금지. JSON만.\n\n"
         "---대화---\n"
         f"{excerpt}\n"

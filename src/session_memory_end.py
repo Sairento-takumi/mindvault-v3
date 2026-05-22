@@ -34,7 +34,19 @@ from memory_extractor import extract_from_jsonl  # type: ignore  # noqa: E402
 PROJECTS_DIR = Path("/Users/yonghaekim/.claude/projects/-Users-yonghaekim-my-folder")
 MEMORY_DIR = PROJECTS_DIR / "memory"
 STAGED_DIR = MEMORY_DIR / "_staged"
+# Sprint 13: procedural type 후보는 _procedural/_staged/ 슬롯에 저장. 결정 메모리와
+# 분리해 indexer + grep·인벤토리 시 한눈에 구분 가능. memory_review_cli 가
+# 양쪽 staged 모두 스캔.
+PROCEDURAL_DIR = MEMORY_DIR / "_procedural"
+PROCEDURAL_STAGED_DIR = PROCEDURAL_DIR / "_staged"
 DEBUG_LOG = Path("/Users/yonghaekim/.claude/mindvault-v2/debug.log")
+
+
+def staged_dir_for(memory_type: str) -> Path:
+    """type 별 staged 슬롯. procedural 만 _procedural/_staged/, 나머지는 기존 슬롯."""
+    if memory_type == "procedural":
+        return PROCEDURAL_STAGED_DIR
+    return STAGED_DIR
 
 
 def _debug(msg: str) -> None:
@@ -54,7 +66,7 @@ def slugify(title: str) -> str:
 
 def existing_slugs() -> set[str]:
     slugs: set[str] = set()
-    for d in (MEMORY_DIR, STAGED_DIR):
+    for d in (MEMORY_DIR, STAGED_DIR, PROCEDURAL_DIR, PROCEDURAL_STAGED_DIR):
         if not d.is_dir():
             continue
         for f in d.glob("*.md"):
@@ -63,11 +75,12 @@ def existing_slugs() -> set[str]:
 
 
 def write_staged(item: dict, session_id: str) -> Path | None:
-    STAGED_DIR.mkdir(parents=True, exist_ok=True)
+    staged_dir = staged_dir_for(item["type"])
+    staged_dir.mkdir(parents=True, exist_ok=True)
     slug = slugify(item["title"])
     ts = time.strftime("%Y%m%d-%H%M%S")
     filename = f"{ts}_{item['type']}_{slug}.md"
-    path = STAGED_DIR / filename
+    path = staged_dir / filename
     frontmatter = (
         "---\n"
         f"name: {item['title']}\n"
