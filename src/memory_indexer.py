@@ -113,13 +113,17 @@ def _safe_memory_path(path: Path, allowed_roots: list[Path]) -> bool:
 
 
 def _collect_md_files(dirs: list[Path]) -> list[Path]:
-    """memory/ 디렉토리에서 .md 수집. _staged/는 제외, symlink outside는 거부."""
+    """memory/ 디렉토리에서 .md 수집. _staged/, MEMORY.md(index 파일), symlink outside 제외."""
     out: list[Path] = []
     for d in dirs:
         if not d.is_dir():
             continue
         for p in d.glob("*.md"):
             if any(part == "_staged" for part in p.parts):
+                continue
+            if p.name == "MEMORY.md":
+                # MEMORY.md는 다른 메모리들의 인덱스(목차)일 뿐. 본문이 한국어
+                # 일반 키워드로 가득해 무관 쿼리에 fts hit으로 끼는 노이즈 원인.
                 continue
             if not _safe_memory_path(p, dirs):
                 _debug(f"unsafe path skip: {p}")

@@ -35,6 +35,9 @@ DEFAULT_THRESHOLD = 0.65  # normalize 후 점수 게이트 (보조)
 DEFAULT_RAW_COSINE_MIN = 0.78  # raw vec cosine 절대 게이트 — V1-style 헛스윙 차단
 EMBED_DIM = 1024
 SNIPPET_CHARS = 160
+# Sprint 7: top-k hit의 [[slug]] wikilink를 1-hop 확장. 메모리 그래프 신호 활용.
+WIKILINK_RE = re.compile(r"\[\[([a-z0-9_-]+)\]\]")
+WIKILINK_EXPAND_MAX = 2  # 1건 hit + 1-hop 2건 = 최대 3건. V1 토큰 낭비 방지선.
 
 
 def _debug(msg: str) -> None:
@@ -170,12 +173,80 @@ def _snippet(conn: sqlite3.Connection, path: str) -> str:
     return body[:SNIPPET_CHARS].replace("\n", " ").strip()
 
 
+def _resolve_wikilink(conn: sqlite3.Connection, slug: str) -> dict | None:
+    """[[slug]] → memories 테이블 row. 매칭 우선:
+    1. memories.name == slug (frontmatter `name:` 슬러그 직접 매칭)
+    2. path basename(.md 제외, '-' → '_') == slug.replace('-','_')
+    실패 시 None.
+    """
+    row = conn.execute(
+        "SELECT path, name, description FROM memories WHERE name=?", (slug,)
+    ).fetchone()
+    if row:
+        return dict(row)
+    snake = slug.replace("-", "_")
+    candidates = conn.execute(
+        "SELECT path, name, description FROM memories WHERE path LIKE ?",
+        (f"%/{snake}.md",),
+    ).fetchall()
+    if candidates:
+        return dict(candidates[0])
+    return None
+
+
+def _expand_wikilinks(
+    conn: sqlite3.Connection,
+    results: list[dict],
+    max_expansion: int = WIKILINK_EXPAND_MAX,
+) -> list[dict]:
+    """results 각각의 body에서 [[slug]] 추출 → 1-hop 확장.
+
+    이미 results에 포함된 path는 skip. 동일 slug 중복 skip. 최대 max_expansion 건.
+    expanded item shape: results와 동일 + source=['wikilink-1hop'] + via='<원본 name>'.
+    """
+    if max_expansion <= 0 or not results:
+        return []
+    seen_paths = {r["path"] for r in results}
+    seen_slugs: set[str] = set()
+    expanded: list[dict] = []
+    for r in results:
+        if len(expanded) >= max_expansion:
+            break
+        body_row = conn.execute(
+            "SELECT body FROM memories_fts WHERE path=?", (r["path"],)
+        ).fetchone()
+        body = body_row["body"] if body_row else (r.get("snippet") or "")
+        for m in WIKILINK_RE.finditer(body):
+            if len(expanded) >= max_expansion:
+                break
+            slug = m.group(1)
+            if slug in seen_slugs:
+                continue
+            seen_slugs.add(slug)
+            resolved = _resolve_wikilink(conn, slug)
+            if not resolved or resolved["path"] in seen_paths:
+                continue
+            seen_paths.add(resolved["path"])
+            expanded.append({
+                "path": resolved["path"],
+                "name": resolved["name"] or slug,
+                "description": resolved["description"] or "",
+                "snippet": _snippet(conn, resolved["path"]),
+                "score": 0.0,
+                "raw_cosine": 0.0,
+                "source": ["wikilink-1hop"],
+                "via": r["name"],
+            })
+    return expanded
+
+
 def recall_memory(
     query: str,
     top_k: int = DEFAULT_TOP_K,
     score_threshold: float = DEFAULT_THRESHOLD,
     raw_cosine_min: float = DEFAULT_RAW_COSINE_MIN,
     db_path: Path | None = None,
+    expand_wikilinks: bool = True,
 ) -> list[dict]:
     """hybrid RRF + raw vec cosine 게이트 memory 검색.
 
@@ -239,6 +310,13 @@ def recall_memory(
                 "raw_cosine": round(raw, 4),
                 "source": info["source"],
             })
+
+        # Sprint 7: wikilink 1-hop 확장 (게이트 통과한 results 기준).
+        # 토큰 절약 위해 results가 있을 때만 호출. body에서 [[slug]] 매칭.
+        if expand_wikilinks and results:
+            expanded = _expand_wikilinks(conn, results)
+            if expanded:
+                results = results + expanded
 
         elapsed = int((time.time() - t0) * 1000)
         rrf_top = [p[:40] for p, _, _ in kept]
