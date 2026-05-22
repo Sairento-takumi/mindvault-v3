@@ -29,6 +29,16 @@ MEMORY_DIRS = [
     Path("/Users/yonghaekim/.claude/projects/-Users-yonghaekim/memory"),
     Path("/Users/yonghaekim/.claude/projects/-Users-yonghaekim-my-folder/memory"),
 ]
+# Sprint 11: env var `MV2_EXTRA_MEMORY_DIRS=path1:path2` — _mtime_changed가 이
+# 디렉토리들도 watch해야 indexer trigger 일관. _spawn_reindex가 부모 env 보존하므로
+# indexer 본체는 자체적으로 같은 env 읽어 처리.
+import os as _os_envread
+_extra = _os_envread.environ.get("MV2_EXTRA_MEMORY_DIRS", "").strip()
+if _extra:
+    for _piece in _extra.split(":"):
+        _piece = _piece.strip()
+        if _piece:
+            MEMORY_DIRS.append(Path(_piece).expanduser())
 INDEX_DB = DATA_DIR / "index.db"
 
 # import 경로 — production(배포본) + dev(repo) 둘 다 지원

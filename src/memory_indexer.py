@@ -16,6 +16,7 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
+import os
 import re
 import sqlite3
 import sys
@@ -41,6 +42,24 @@ DEFAULT_MEMORY_DIRS = [
     Path("/Users/yonghaekim/.claude/projects/-Users-yonghaekim/memory"),
     Path("/Users/yonghaekim/.claude/projects/-Users-yonghaekim-my-folder/memory"),
 ]
+# Sprint 11: env var `MV2_EXTRA_MEMORY_DIRS=path1:path2` 로 추가 indexing 디렉토리.
+# 예: handoff/ 폴더에 sprint 별 brief/build-log 두는 환경에서 그 콘텐츠를 회수
+# 가능하게. hook의 _spawn_reindex가 부모 env 보존하므로 shell rc에 export 1회면
+# indexer + hook 양쪽에 자동 적용.
+ENV_EXTRA_DIRS = "MV2_EXTRA_MEMORY_DIRS"
+
+
+def _extra_memory_dirs() -> list[Path]:
+    raw = os.environ.get(ENV_EXTRA_DIRS, "").strip()
+    if not raw:
+        return []
+    out: list[Path] = []
+    for piece in raw.split(":"):
+        piece = piece.strip()
+        if not piece:
+            continue
+        out.append(Path(piece).expanduser())
+    return out
 
 FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n?", re.DOTALL)
 
@@ -245,7 +264,7 @@ def incremental_index(
     lock 못 잡으면 즉시 0으로 반환 (다른 indexer가 작업 중).
     """
     if memory_dirs is None:
-        memory_dirs = DEFAULT_MEMORY_DIRS
+        memory_dirs = DEFAULT_MEMORY_DIRS + _extra_memory_dirs()
     if db_path is None:
         db_path = DB_PATH
 
