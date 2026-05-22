@@ -238,6 +238,11 @@ def _init_db(conn: sqlite3.Connection) -> None:
             embedding BLOB NOT NULL,
             indexed_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS embed_cache (
+            query_hash TEXT PRIMARY KEY,
+            vector BLOB NOT NULL,
+            created_at TEXT NOT NULL
+        );
         """
     )
     conn.execute(

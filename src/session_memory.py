@@ -378,6 +378,35 @@ def trigger_background_indexer() -> None:
         _debug(f"indexer trigger failed: {e}")
 
 
+def trigger_bge_m3_warmup() -> None:
+    """Sprint 8: BGE-M3 서버에 dummy embed 요청을 백그라운드로 spawn.
+
+    launchd로 상주 중이라 모델은 메모리 상주지만, MLX forward 첫 호출 path가
+    살짝 늦을 수 있음 (특히 다른 요청 처리 직후). SessionStart hook은 250ms
+    제한 없는 컨텍스트라 여기서 warmup 보내두면, 직후 사용자의 첫 메시지에서
+    memory-recall hook이 호출할 때 warm path 사용.
+    """
+    try:
+        import subprocess
+        code = (
+            "import urllib.request, json;"
+            "body = json.dumps({'input':'warmup'}).encode();"
+            "req = urllib.request.Request("
+            "'http://localhost:8081/embed', data=body,"
+            " headers={'Content-Type':'application/json'}, method='POST');"
+            "urllib.request.urlopen(req, timeout=3).read()"
+        )
+        subprocess.Popen(
+            [sys.executable, "-c", code],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except Exception as e:
+        _debug(f"bge-m3 warmup spawn failed: {e}")
+
+
 def main() -> int:
     # 무한 재귀 차단: 자기 자신의 claude -p 안에서 발동된 sub-session의 SessionStart hook은 즉시 skip
     if os.environ.get(RECURSION_GUARD_ENV) == "1":
@@ -387,6 +416,9 @@ def main() -> int:
         except Exception:
             pass
         return 0
+    # Sprint 8: 가능한 일찍 BGE-M3 warmup spawn. 직후 사용자 첫 메시지의
+    # memory-recall hook(250ms 제한)이 warm path 활용하도록.
+    trigger_bge_m3_warmup()
     try:
         # 수동 실행 편의: 환경변수로 세션 ID 지정 가능. Claude Code는 stdin JSON으로 전달.
         exclude = os.environ.get("CLAUDE_SESSION_ID")

@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import re
 import sqlite3
@@ -69,11 +70,57 @@ def parse_frontmatter(text: str) -> tuple[dict, str]:
     return fm, text[m.end():]
 
 
+def _embed_cache_get(query: str) -> list[float] | None:
+    """sqlite embed_cache 조회. miss시 None. DB 에러는 silent (cache는 옵션)."""
+    h = hashlib.sha256(query.encode("utf-8")).hexdigest()
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        try:
+            row = conn.execute(
+                "SELECT vector FROM embed_cache WHERE query_hash=?", (h,)
+            ).fetchone()
+        finally:
+            conn.close()
+    except sqlite3.DatabaseError:
+        return None
+    if not row:
+        return None
+    arr = np.frombuffer(row[0], dtype=np.float32)
+    if arr.shape != (EMBED_DIM,):
+        return None
+    return arr.tolist()
+
+
+def _embed_cache_put(query: str, vector: list[float]) -> None:
+    """sqlite embed_cache 저장. 실패 silent (다음 호출이 다시 cache miss → BGE-M3)."""
+    h = hashlib.sha256(query.encode("utf-8")).hexdigest()
+    try:
+        blob = np.asarray(vector, dtype=np.float32).tobytes()
+        conn = sqlite3.connect(str(DB_PATH))
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO embed_cache(query_hash, vector, created_at) VALUES(?,?,?)",
+                (h, blob, time.strftime("%Y-%m-%dT%H:%M:%S")),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except sqlite3.DatabaseError as e:
+        _debug(f"embed cache put fail: {e}")
+
+
 def embed_text(text: str) -> list[float] | None:
-    """BGE-M3 서버 호출 → 1024차원 dense 벡터. 실패 시 None."""
+    """BGE-M3 서버 호출 → 1024차원 dense 벡터. Sprint 8: sqlite embed_cache 적용.
+
+    cache hit → 0ms 즉시 반환 (BGE-M3 skip). cache miss → BGE-M3 호출 → cache put.
+    BGE-M3 모델은 안 바뀌므로 TTL 없음 (모델 교체 시 embed_cache truncate 필요).
+    """
     text = (text or "").strip()
     if not text:
         return None
+    cached = _embed_cache_get(text)
+    if cached is not None:
+        return cached
     body = json.dumps({"input": text}).encode("utf-8")
     req = urllib.request.Request(
         BGE_M3_URL,
@@ -91,6 +138,7 @@ def embed_text(text: str) -> list[float] | None:
                 f"len={len(vec) if isinstance(vec, list) else '?'}"
             )
             return None
+        _embed_cache_put(text, vec)
         return vec
     except (TimeoutError, urllib.error.URLError, json.JSONDecodeError, OSError) as e:
         _debug(f"embed fail: {type(e).__name__}: {e}")
