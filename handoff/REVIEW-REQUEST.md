@@ -1,3 +1,8 @@
+---
+name: handoff-review-request-sprint3
+description: Sprint 3 review request (Bob → Richard) — SessionEnd 훅 Gemma 기억 후보 추출, _staged 폴더, /memory review 슬래시 명령 승인 게이트, MindVault v1 자동 저장 실패 재발 차단
+---
+
 # Review Request — Sprint 3 (SessionEnd staging + `/memory review`)
 
 *From: Bob → To: Richard*

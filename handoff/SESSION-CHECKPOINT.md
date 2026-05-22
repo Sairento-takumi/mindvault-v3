@@ -1,3 +1,8 @@
+---
+name: handoff-session-checkpoint-sprint4
+description: 2026-05-22 Sprint 4 종료 세션 체크포인트 — Layer 4 hybrid recall 배포 완료. BGE-M3 MLX 서버 launchd, memory_indexer, memory_search RRF k=60 description 1.5x, UserPromptSubmit hook 250ms timeout. 4-layer 파이프라인 완성
+---
+
 # Session Checkpoint — 2026-05-22 (Sprint 4 종료, Layer 4 배포)
 
 *Read this before reading anything else.*

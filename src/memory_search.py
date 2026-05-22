@@ -381,14 +381,22 @@ def recall_memory(
         combined = rrf_combine(vec_rows, fts_rows, k=RRF_K)
         normalize_scores(combined)
 
-        # raw cosine 게이트: vec-only hit + raw < min은 차단. fts hit은 면제 (BM25 보장).
-        # normalize score는 ranking용 보조 — 절대 차단 X (raw 통과한 path끼리만 비교).
+        # raw cosine 게이트: 의미적 무관 path 차단.
+        # Sprint 12: fts source도 raw_cosine 검사 적용 (단어 우연 매칭으로 잡담이
+        # fts-only hit으로 통과하는 회귀 차단). fts source인 경우 임계를 절반으로
+        # 완화 — 정확 keyword 매칭은 raw 약해도 정당하지만 raw 0.20 미만은 잡담 영역.
+        # vec 임베딩이 아예 실패(서버 다운)했으면 게이트 면제 — fts-only fallback 허용.
+        # normalize score는 ranking signal로만 사용 (절대 차단 X).
+        vec_available = bool(raw_cosine_map)
         kept = []
+        fts_gate = raw_cosine_min * 0.5 if raw_cosine_min > 0 else 0.0
         for path, info in combined.items():
             raw = raw_cosine_map.get(path, 0.0)
-            if raw_cosine_min > 0 and raw < raw_cosine_min and "fts" not in info["source"]:
-                continue
-            # normalize score는 ranking signal로만 사용
+            if raw_cosine_min > 0 and vec_available:
+                has_vec = "vec" in info["source"]
+                threshold = raw_cosine_min if has_vec else fts_gate
+                if raw < threshold:
+                    continue
             kept.append((path, info, raw))
         # 정렬: raw cosine 우선 (절대 관련도) → 동률 시 normalize score
         kept.sort(key=lambda x: (x[2], x[1]["score"]), reverse=True)

@@ -1,3 +1,8 @@
+---
+name: handoff-build-log
+description: MindVault v2 Sprint 1~3 빌드 로그 — Architect 소유 Builder가 각 step 완료 후 갱신. SessionStart 훅 MVP, FTS5 인덱스, SessionEnd staging + /memory review 승인 게이트 구현 기록
+---
+
 # Build Log — MindVault v2
 
 *Owned by Architect. Updated by Builder after each step.*

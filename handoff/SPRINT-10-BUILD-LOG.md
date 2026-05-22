@@ -1,3 +1,8 @@
+---
+name: handoff-sprint10-build-log
+description: Sprint 10 build log — memory_indexer incremental_index 매 .md 처리 후 conn.commit() 적용, embed_text(sub-conn embed_cache write)을 메인 conn write 전에 reordering해 self-deadlock 회피, 50 hook + 1 indexer 동시 lock 충돌 0건 검증
+---
+
 # Sprint 10 — indexer 트랜잭션 리팩터 BUILD LOG
 
 ## 목표

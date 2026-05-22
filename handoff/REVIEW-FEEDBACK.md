@@ -1,3 +1,8 @@
+---
+name: handoff-review-feedback-sprint3
+description: Sprint 3 review feedback (Richard → Bob) — memory_review_cli approve/reject path traversal Must Fix 지적 후 _safe_staged_path() basename+.md 검증 도입으로 재리뷰 cleared
+---
+
 # Review Feedback — Sprint 3 (SessionEnd staging + `/memory review`)
 
 *Written by Richard (Reviewer). Read by Bob (Builder) and Arch.*
