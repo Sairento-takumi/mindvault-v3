@@ -1,0 +1,277 @@
+#!/usr/bin/env python3
+"""MindVault v3 Sprint 14 — Memory Compiler.
+
+세션 종료 시 extractor 가 뽑은 후보(candidate) 와 기존 memory 파일의 매칭을 자동
+판단해, 동일 주제 메모리가 이미 있으면 Gemma 로 정제·통합한 update 후보로 변환한다.
+Karpathy LLM-as-compiler 패턴의 핵심 구현체.
+
+opt-in: session_memory_end 가 환경변수 `MV2_AUTO_COMPILE=1` 일 때만 호출.
+실패는 silent — 정제 실패 시 원본 candidate 그대로 통과해 기존 v2.9.2 흐름 유지.
+
+매칭 규칙:
+1. frontmatter `name` 완전 일치 (case-insensitive)
+2. 안 되면 slugify(title) == _candidate_slug(stem) (timestamp/type prefix 제거)
+
+update 후보 메타:
+- `update_of`: 기존 메모리 absolute path
+- `diff_summary`: +added -removed 짧은 요약
+
+검토는 /memory_review 의 `diff <filename>` 으로. approve 시 기존 파일 .bak 백업 후 overwrite.
+"""
+from __future__ import annotations
+
+import difflib
+import json
+import os
+import re
+import sys
+import time
+import traceback
+import urllib.request
+from pathlib import Path
+
+# memory_indexer 의 디렉토리 정책·frontmatter 파서 공유
+sys.path.insert(0, str(Path(__file__).parent))
+from memory_indexer import (  # noqa: E402
+    DEFAULT_MEMORY_DIRS,
+    _collect_md_files,
+    _extra_memory_dirs,
+    parse_frontmatter,
+)
+
+DATA_DIR = Path("/Users/yonghaekim/.claude/mindvault-v2")
+DEBUG_LOG = DATA_DIR / "debug.log"
+GEMMA_URL = "http://localhost:8080/v1/chat/completions"
+GEMMA_MODEL = "mlx-community/gemma-4-e4b-it-4bit"
+GEMMA_TIMEOUT = 45
+COMPILE_BODY_LIMIT = 500  # update 결과 본문 최대 글자 수 (soft hint to Gemma)
+COMPILE_BODY_HARD_LIMIT = 1200  # 실제 trim 한계
+ENABLE_AUTO_COMPILE_ENV = "MV2_AUTO_COMPILE"
+
+# session_memory_end 의 slugify 와 동등 — 매칭 일관성. unit test 가 동등성 보장.
+SLUG_CHAR_RE = re.compile(r"[^\w가-힣\-]")
+STAGED_STEM_RE = re.compile(r"^\d{8}-\d{6}_[a-z]+_(.+)$")
+
+
+def _debug(msg: str) -> None:
+    try:
+        DEBUG_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with DEBUG_LOG.open("a") as f:
+            f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] compiler: {msg}\n")
+    except Exception:
+        pass
+
+
+def slugify(title: str) -> str:
+    """session_memory_end.slugify 와 동일 룰. 매칭 일관성 필수."""
+    slug = re.sub(r"\s+", "_", (title or "").strip())
+    slug = SLUG_CHAR_RE.sub("", slug)
+    return slug[:30] or "memory"
+
+
+def _candidate_slug(stem: str) -> str:
+    """staged 파일명 (20YYMMDD-HHMMSS_<type>_<slug>.md) 에서 본질 slug 추출."""
+    m = STAGED_STEM_RE.match(stem)
+    return m.group(1) if m else stem
+
+
+def _call_gemma(prompt: str, max_tokens: int = 800) -> str | None:
+    """memory_extractor.call_gemma 와 동일 패턴 — 직접 구현해 모듈 결합 최소화."""
+    body = json.dumps(
+        {
+            "model": GEMMA_MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": max_tokens,
+            "temperature": 0.2,
+        }
+    ).encode()
+    req = urllib.request.Request(
+        GEMMA_URL,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=GEMMA_TIMEOUT) as resp:
+            data = json.loads(resp.read())
+        choices = data.get("choices") or []
+        if not choices:
+            return None
+        content = (choices[0].get("message") or {}).get("content") or ""
+        return content.strip() or None
+    except Exception as e:
+        _debug(f"gemma fail: {type(e).__name__} {e}")
+        return None
+
+
+def _find_existing_memory(
+    candidate: dict, memory_dirs: list[Path]
+) -> dict | None:
+    """candidate 와 매칭되는 기존 memory 파일 1건 반환.
+
+    매칭 우선순위:
+    1. frontmatter name 완전 일치 (lowercase strip)
+    2. slugify(title) == _candidate_slug(stem)
+    """
+    new_name = (candidate.get("title") or "").strip().lower()
+    new_slug = slugify(candidate.get("title") or "")
+    if not new_slug:
+        return None
+    # _collect_md_files 가 staged 디렉토리 제외 + _procedural/ 포함.
+    # promoted memory 만 대상 — staged 끼리의 update 매칭은 의미 없음.
+    fallback_match: dict | None = None
+    for p in _collect_md_files(memory_dirs):
+        try:
+            text = p.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        fm, body = parse_frontmatter(text)
+        fm_name = (fm.get("name") or "").strip().lower()
+        existing_slug = _candidate_slug(p.stem)
+        # 1순위: name exact (가장 신뢰도 높음)
+        if new_name and fm_name and new_name == fm_name:
+            return {"path": p, "frontmatter": fm, "body": body}
+        # 2순위: slug 일치 (fallback)
+        if existing_slug == new_slug and fallback_match is None:
+            fallback_match = {"path": p, "frontmatter": fm, "body": body}
+    return fallback_match
+
+
+def _build_compile_prompt(existing_body: str, candidate: dict) -> str:
+    return (
+        "당신은 기존 wiki 페이지를 update 하는 편집자다.\n"
+        "기존 본문 + 새로 들어온 사실(fact) 을 받아 다음 원칙으로 통합한다:\n"
+        "- 기존 본문의 핵심·예시·수치 보존\n"
+        "- outdated 된 사실(새 fact 와 모순) 은 새 fact 로 교체\n"
+        "- 새 fact 가 기존을 정밀화하면 합쳐서 더 정확하게\n"
+        "- 형식·문체 일관 유지, 한국어 우선\n"
+        f"- 본문 {COMPILE_BODY_LIMIT}자 이내, plain text (markdown fence 금지)\n\n"
+        "기존 본문:\n"
+        "---\n"
+        f"{existing_body[:COMPILE_BODY_HARD_LIMIT]}\n"
+        "---\n\n"
+        f"새 fact (title: {candidate.get('title', '')}):\n"
+        f"{(candidate.get('body') or '')[:COMPILE_BODY_HARD_LIMIT]}\n\n"
+        "수정된 본문만 출력. 해설·markdown fence·frontmatter 금지."
+    )
+
+
+_FENCE_HEAD_RE = re.compile(r"^```[a-zA-Z0-9_-]*\n?")
+_FENCE_TAIL_RE = re.compile(r"\n?```$")
+
+
+def _strip_fences(text: str) -> str:
+    text = _FENCE_HEAD_RE.sub("", text)
+    text = _FENCE_TAIL_RE.sub("", text)
+    return text.strip()
+
+
+def _compile_update(existing_body: str, candidate: dict) -> str | None:
+    """기존 body 와 새 fact 를 Gemma 로 통합 → 정제 body. 실패 시 None.
+
+    Gemma 응답에서 markdown fence 제거 + hard limit trim 후 반환.
+    """
+    prompt = _build_compile_prompt(existing_body, candidate)
+    out = _call_gemma(prompt, max_tokens=800)
+    if not out:
+        return None
+    out = _strip_fences(out)
+    if not out:
+        return None
+    if len(out) > COMPILE_BODY_HARD_LIMIT:
+        out = out[:COMPILE_BODY_HARD_LIMIT].rstrip()
+    return out
+
+
+def diff_summary(old: str, new: str) -> str:
+    """매우 짧은 +added -removed 요약. review CLI 표시용."""
+    if not old and not new:
+        return ""
+    old_lines = old.splitlines() or [""]
+    new_lines = new.splitlines() or [""]
+    diff = list(difflib.unified_diff(old_lines, new_lines, n=0, lineterm=""))
+    added = sum(
+        1 for l in diff if l.startswith("+") and not l.startswith("+++")
+    )
+    removed = sum(
+        1 for l in diff if l.startswith("-") and not l.startswith("---")
+    )
+    return f"+{added} -{removed} ({len(new)}자 ← {len(old)}자)"
+
+
+def unified_diff_text(old: str, new: str, context: int = 2) -> str:
+    """human-readable unified diff. review CLI `diff` 서브커맨드용."""
+    old_lines = (old or "").splitlines(keepends=False)
+    new_lines = (new or "").splitlines(keepends=False)
+    diff = difflib.unified_diff(
+        old_lines,
+        new_lines,
+        fromfile="existing",
+        tofile="compiled",
+        n=context,
+        lineterm="",
+    )
+    return "\n".join(diff)
+
+
+def compile_candidates(
+    candidates: list[dict], memory_dirs: list[Path] | None = None
+) -> list[dict]:
+    """candidate 각각에 대해 기존 memory 매칭 → Gemma 정제 → update 메타 부착.
+
+    Gemma 호출 실패하면 해당 candidate 는 원본 그대로 통과.
+    """
+    if not candidates:
+        return []
+    if memory_dirs is None:
+        memory_dirs = DEFAULT_MEMORY_DIRS + _extra_memory_dirs()
+    out: list[dict] = []
+    for c in candidates:
+        try:
+            existing = _find_existing_memory(c, memory_dirs)
+        except Exception as e:
+            _debug(f"find existing fail: {e}")
+            existing = None
+        if existing is None:
+            out.append(c)
+            continue
+        compiled = _compile_update(existing["body"], c)
+        if not compiled:
+            _debug(f"compile fail (kept new) title={c.get('title')!r}")
+            out.append(c)
+            continue
+        merged = dict(c)
+        merged["body"] = compiled
+        merged["update_of"] = str(existing["path"])
+        merged["diff_summary"] = diff_summary(existing["body"], compiled)
+        out.append(merged)
+        _debug(
+            f"compiled title={c.get('title')!r} update_of={existing['path']}"
+        )
+    return out
+
+
+def auto_compile_enabled() -> bool:
+    """env var 기반 opt-in 체크. session_memory_end 가 사용."""
+    return os.environ.get(ENABLE_AUTO_COMPILE_ENV, "").strip() == "1"
+
+
+def main() -> int:
+    """stdin JSON candidates 받아 compile_candidates 결과 stdout 출력 — CLI/디버그용."""
+    try:
+        raw = sys.stdin.read()
+        candidates = json.loads(raw) if raw.strip() else []
+        if not isinstance(candidates, list):
+            print("[]")
+            return 0
+        out = compile_candidates(candidates)
+        json.dump(out, sys.stdout, ensure_ascii=False)
+        return 0
+    except Exception as e:
+        _debug(f"main FATAL: {e}\n{traceback.format_exc()}")
+        print("[]")
+        return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

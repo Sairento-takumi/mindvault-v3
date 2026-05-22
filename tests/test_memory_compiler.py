@@ -1,0 +1,439 @@
+"""Sprint 14 — Memory Compiler 단위 테스트.
+
+Gemma 호출은 모두 _call_gemma mock. 실 서버 의존 없음.
+"""
+from __future__ import annotations
+
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+SRC = Path(__file__).resolve().parent.parent / "src"
+sys.path.insert(0, str(SRC))
+
+
+class TestSlugifyEquivalence(unittest.TestCase):
+    """session_memory_end.slugify 와 memory_compiler.slugify 동등성 — 매칭 일관성 필수."""
+
+    def test_slugify_matches_session_end(self):
+        import memory_compiler
+        import session_memory_end
+        cases = [
+            "Hello World",
+            "한국어 제목",
+            "claude --bg syntax",
+            "MindVault v3 Sprint 14",
+            "  trim  whitespace  ",
+            "특수!@#문자  제거",
+        ]
+        for title in cases:
+            self.assertEqual(
+                memory_compiler.slugify(title),
+                session_memory_end.slugify(title),
+                f"slugify mismatch for {title!r}",
+            )
+
+
+class TestDiffSummary(unittest.TestCase):
+    def test_diff_summary_handles_empty(self):
+        from memory_compiler import diff_summary
+        self.assertEqual(diff_summary("", ""), "")
+
+    def test_diff_summary_counts(self):
+        from memory_compiler import diff_summary
+        s = diff_summary("a\nb\nc", "a\nB\nc\nd")
+        # B 한 줄 교체 + d 추가
+        self.assertIn("+", s)
+        self.assertIn("-", s)
+        self.assertIn("자", s)  # length report
+
+
+class TestUnifiedDiffText(unittest.TestCase):
+    def test_unified_diff_basic(self):
+        from memory_compiler import unified_diff_text
+        out = unified_diff_text("old line", "new line")
+        self.assertIn("---", out)
+        self.assertIn("+++", out)
+
+
+class TestFindExistingMemory(unittest.TestCase):
+    def _make_memory_dir(self, files: dict[str, str]) -> Path:
+        d = Path(tempfile.mkdtemp())
+        for name, content in files.items():
+            p = d / name
+            p.write_text(content, encoding="utf-8")
+        return d
+
+    def test_match_by_frontmatter_name(self):
+        from memory_compiler import _find_existing_memory
+        d = self._make_memory_dir({
+            "anything.md": (
+                "---\nname: Claude BG Syntax\ndescription: bg\n---\n"
+                "claude --bg foo"
+            ),
+        })
+        cand = {"title": "claude bg syntax", "body": "new fact"}
+        out = _find_existing_memory(cand, [d])
+        self.assertIsNotNone(out)
+        self.assertEqual(out["path"].name, "anything.md")
+
+    def test_match_by_slug_fallback(self):
+        from memory_compiler import _find_existing_memory
+        d = self._make_memory_dir({
+            "my_pattern.md": (
+                "---\nname: 다른 이름\ndescription: x\n---\nbody"
+            ),
+        })
+        cand = {"title": "my pattern", "body": "fact"}
+        out = _find_existing_memory(cand, [d])
+        self.assertIsNotNone(out)
+        self.assertEqual(out["path"].stem, "my_pattern")
+
+    def test_no_match(self):
+        from memory_compiler import _find_existing_memory
+        d = self._make_memory_dir({
+            "totally_different.md": "---\nname: X\n---\nbody"
+        })
+        cand = {"title": "unrelated thing", "body": "fact"}
+        self.assertIsNone(_find_existing_memory(cand, [d]))
+
+    def test_name_match_beats_slug(self):
+        """name exact 매칭 > slug fallback. 같은 dir 에 둘 다 있으면 name 우선."""
+        from memory_compiler import _find_existing_memory
+        d = self._make_memory_dir({
+            "fallback_slug.md": (
+                "---\nname: 다른 이름\ndescription: x\n---\nbody1"
+            ),
+            "other_name.md": (
+                "---\nname: fallback slug\ndescription: y\n---\nbody2"
+            ),
+        })
+        cand = {"title": "fallback slug", "body": "fact"}
+        out = _find_existing_memory(cand, [d])
+        # name 매칭은 other_name.md 의 name 필드
+        self.assertEqual(out["path"].stem, "other_name")
+
+
+class TestCompileCandidates(unittest.TestCase):
+    def _setup_dir(self):
+        d = Path(tempfile.mkdtemp())
+        (d / "existing.md").write_text(
+            "---\nname: existing topic\ndescription: x\n---\n"
+            "기존 본문. v1.0.0 사용 중.",
+            encoding="utf-8",
+        )
+        return d
+
+    def test_no_candidates(self):
+        from memory_compiler import compile_candidates
+        self.assertEqual(compile_candidates([], memory_dirs=[]), [])
+
+    def test_new_candidate_passes_through(self):
+        from memory_compiler import compile_candidates
+        d = self._setup_dir()
+        cand = {
+            "type": "feedback",
+            "title": "totally new",
+            "body": "new fact",
+            "reason": "r",
+            "evidence": "e",
+        }
+        out = compile_candidates([cand], memory_dirs=[d])
+        self.assertEqual(len(out), 1)
+        self.assertNotIn("update_of", out[0])
+        self.assertEqual(out[0]["body"], "new fact")
+
+    def test_matching_candidate_becomes_update(self):
+        import memory_compiler
+        d = self._setup_dir()
+        cand = {
+            "type": "feedback",
+            "title": "existing topic",
+            "body": "v2.0.0 으로 바뀜",
+            "reason": "r",
+            "evidence": "e",
+        }
+        with patch.object(
+            memory_compiler,
+            "_call_gemma",
+            return_value="기존 본문. v2.0.0 사용 중.",
+        ):
+            out = memory_compiler.compile_candidates([cand], memory_dirs=[d])
+        self.assertEqual(len(out), 1)
+        self.assertIn("update_of", out[0])
+        self.assertTrue(out[0]["update_of"].endswith("existing.md"))
+        self.assertIn("v2.0.0", out[0]["body"])
+        self.assertIn("diff_summary", out[0])
+
+    def test_gemma_failure_keeps_original(self):
+        import memory_compiler
+        d = self._setup_dir()
+        cand = {
+            "type": "feedback",
+            "title": "existing topic",
+            "body": "new fact",
+            "reason": "r",
+            "evidence": "e",
+        }
+        with patch.object(memory_compiler, "_call_gemma", return_value=None):
+            out = memory_compiler.compile_candidates([cand], memory_dirs=[d])
+        # Gemma 실패 → 원본 유지, update_of 없음
+        self.assertNotIn("update_of", out[0])
+        self.assertEqual(out[0]["body"], "new fact")
+
+    def test_strips_markdown_fences(self):
+        import memory_compiler
+        d = self._setup_dir()
+        cand = {
+            "type": "feedback",
+            "title": "existing topic",
+            "body": "v3 fact",
+            "reason": "r",
+            "evidence": "e",
+        }
+        # Gemma 가 가끔 markdown fence 추가
+        with patch.object(
+            memory_compiler,
+            "_call_gemma",
+            return_value="```\nv3 정제 본문\n```",
+        ):
+            out = memory_compiler.compile_candidates([cand], memory_dirs=[d])
+        self.assertNotIn("```", out[0]["body"])
+        self.assertIn("v3 정제 본문", out[0]["body"])
+
+
+class TestAutoCompileEnabled(unittest.TestCase):
+    def test_default_off(self):
+        import memory_compiler
+        with patch.dict("os.environ", {}, clear=False):
+            import os
+            os.environ.pop("MV2_AUTO_COMPILE", None)
+            self.assertFalse(memory_compiler.auto_compile_enabled())
+
+    def test_on_when_one(self):
+        import memory_compiler
+        with patch.dict("os.environ", {"MV2_AUTO_COMPILE": "1"}):
+            self.assertTrue(memory_compiler.auto_compile_enabled())
+
+    def test_off_for_other_values(self):
+        import memory_compiler
+        for val in ("0", "true", "yes", ""):
+            with patch.dict("os.environ", {"MV2_AUTO_COMPILE": val}):
+                self.assertFalse(
+                    memory_compiler.auto_compile_enabled(),
+                    f"unexpected on for {val!r}",
+                )
+
+
+class TestSessionEndIntegration(unittest.TestCase):
+    """session_memory_end.write_staged 가 update_of/diff_summary 메타 보존하는지."""
+
+    def test_write_staged_includes_update_meta(self):
+        import session_memory_end as sme
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            with patch.object(sme, "MEMORY_DIR", tmp_path), \
+                 patch.object(sme, "STAGED_DIR", tmp_path / "_staged"), \
+                 patch.object(sme, "PROCEDURAL_DIR", tmp_path / "_procedural"), \
+                 patch.object(
+                     sme,
+                     "PROCEDURAL_STAGED_DIR",
+                     tmp_path / "_procedural" / "_staged",
+                 ):
+                item = {
+                    "type": "feedback",
+                    "title": "topic A",
+                    "body": "compiled body",
+                    "reason": "r",
+                    "evidence": "e",
+                    "update_of": "/some/path/topic_a.md",
+                    "diff_summary": "+3 -1 (50자 ← 30자)",
+                }
+                path = sme.write_staged(item, "abc12345")
+                text = path.read_text(encoding="utf-8")
+                self.assertIn("update_of: /some/path/topic_a.md", text)
+                self.assertIn("diff_summary: +3 -1", text)
+
+    def test_write_staged_without_update_meta_unchanged(self):
+        """기존 경로 — update_of 없으면 prior frontmatter 그대로."""
+        import session_memory_end as sme
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            with patch.object(sme, "MEMORY_DIR", tmp_path), \
+                 patch.object(sme, "STAGED_DIR", tmp_path / "_staged"), \
+                 patch.object(sme, "PROCEDURAL_DIR", tmp_path / "_procedural"), \
+                 patch.object(
+                     sme,
+                     "PROCEDURAL_STAGED_DIR",
+                     tmp_path / "_procedural" / "_staged",
+                 ):
+                item = {
+                    "type": "feedback",
+                    "title": "topic B",
+                    "body": "fresh body",
+                    "reason": "r",
+                    "evidence": "e",
+                }
+                path = sme.write_staged(item, "abc12345")
+                text = path.read_text(encoding="utf-8")
+                self.assertNotIn("update_of:", text)
+                self.assertNotIn("diff_summary:", text)
+
+
+class TestReviewCliUpdateFlow(unittest.TestCase):
+    """memory_review_cli 의 update flow — diff + approve."""
+
+    def test_diff_for_update_candidate(self):
+        import memory_review_cli as mrc
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            mem = root / "memory"
+            mem.mkdir()
+            staged = mem / "_staged"
+            staged.mkdir()
+            existing = mem / "topic.md"
+            existing.write_text(
+                "---\nname: topic\n---\nold body line 1\nold body line 2",
+                encoding="utf-8",
+            )
+            staged_file = staged / "20260523-010101_feedback_topic.md"
+            staged_file.write_text(
+                "---\nname: topic\ndescription: x\ntype: feedback\n"
+                f"update_of: {existing}\n"
+                "diff_summary: +1 -1\n---\n"
+                "new body line 1\nold body line 2",
+                encoding="utf-8",
+            )
+            import io
+            buf = io.StringIO()
+            with patch.object(mrc, "STAGED_DIR", staged), \
+                 patch.object(
+                     mrc,
+                     "PROCEDURAL_STAGED_DIR",
+                     mem / "_procedural" / "_staged",
+                 ), \
+                 patch.object(
+                     mrc,
+                     "STAGED_DIRS",
+                     (staged, mem / "_procedural" / "_staged"),
+                 ), \
+                 patch.object(
+                     mrc, "_allowed_update_roots", return_value=[mem]
+                 ), \
+                 patch("sys.stdout", buf):
+                rc = mrc.cmd_diff(staged_file.name)
+            self.assertEqual(rc, 0)
+            out = json.loads(buf.getvalue())
+            self.assertTrue(out["ok"])
+            self.assertEqual(out["kind"], "update")
+            self.assertIn("old body line 1", out["unified_diff"])
+            self.assertIn("new body line 1", out["unified_diff"])
+
+    def test_diff_for_new_candidate(self):
+        import memory_review_cli as mrc
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            staged = root / "_staged"
+            staged.mkdir()
+            staged_file = staged / "20260523-010101_feedback_new_topic.md"
+            staged_file.write_text(
+                "---\nname: new topic\ndescription: x\ntype: feedback\n---\n"
+                "brand new body",
+                encoding="utf-8",
+            )
+            import io
+            buf = io.StringIO()
+            with patch.object(mrc, "STAGED_DIR", staged), \
+                 patch.object(
+                     mrc,
+                     "PROCEDURAL_STAGED_DIR",
+                     root / "_procedural" / "_staged",
+                 ), \
+                 patch.object(
+                     mrc,
+                     "STAGED_DIRS",
+                     (staged, root / "_procedural" / "_staged"),
+                 ), \
+                 patch("sys.stdout", buf):
+                rc = mrc.cmd_diff(staged_file.name)
+            self.assertEqual(rc, 0)
+            out = json.loads(buf.getvalue())
+            self.assertEqual(out["kind"], "new")
+            self.assertIn("brand new body", out["body"])
+
+    def test_approve_update_writes_backup_and_overwrites(self):
+        import memory_review_cli as mrc
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            mem = root / "memory"
+            mem.mkdir()
+            staged = mem / "_staged"
+            staged.mkdir()
+            existing = mem / "topic.md"
+            existing.write_text(
+                "---\nname: topic\ndescription: x\ntype: feedback\n---\n"
+                "old body",
+                encoding="utf-8",
+            )
+            staged_file = staged / "20260523-010101_feedback_topic.md"
+            staged_file.write_text(
+                "---\nname: topic\ndescription: x\ntype: feedback\n"
+                f"update_of: {existing}\n"
+                "diff_summary: +1 -1\n---\n"
+                "new compiled body",
+                encoding="utf-8",
+            )
+            import io
+            buf = io.StringIO()
+            # reindex 는 production DB 건드리지 않도록 mock
+            with patch.object(mrc, "STAGED_DIR", staged), \
+                 patch.object(
+                     mrc,
+                     "PROCEDURAL_STAGED_DIR",
+                     mem / "_procedural" / "_staged",
+                 ), \
+                 patch.object(
+                     mrc,
+                     "STAGED_DIRS",
+                     (staged, mem / "_procedural" / "_staged"),
+                 ), \
+                 patch.object(
+                     mrc, "_allowed_update_roots", return_value=[mem]
+                 ), \
+                 patch.dict("sys.modules", {"memory_indexer": _StubIndexer()}), \
+                 patch("sys.stdout", buf):
+                rc = mrc.cmd_approve(staged_file.name)
+            self.assertEqual(rc, 0)
+            out = json.loads(buf.getvalue())
+            self.assertTrue(out["ok"], out)
+            self.assertEqual(out["kind"], "update")
+            # 기존 파일 본문 교체됨
+            self.assertIn("new compiled body", existing.read_text())
+            # frontmatter name/description/type 보존 (기존 값 우선)
+            self.assertIn("name: topic", existing.read_text())
+            # backup 파일 존재
+            bak = existing.with_suffix(".md.bak")
+            self.assertTrue(bak.is_file())
+            self.assertIn("old body", bak.read_text())
+            # staged 파일 삭제됨
+            self.assertFalse(staged_file.exists())
+
+
+class _StubIndexer:
+    """memory_indexer mock — incremental_index 호출 시 noop dict 반환."""
+    DEFAULT_MEMORY_DIRS = []
+
+    @staticmethod
+    def _extra_memory_dirs():
+        return []
+
+    @staticmethod
+    def incremental_index(*a, **kw):
+        return {"updated": 0, "skipped": 0, "removed": 0}
+
+
+if __name__ == "__main__":
+    unittest.main()

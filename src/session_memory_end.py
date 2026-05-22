@@ -81,18 +81,22 @@ def write_staged(item: dict, session_id: str) -> Path | None:
     ts = time.strftime("%Y%m%d-%H%M%S")
     filename = f"{ts}_{item['type']}_{slug}.md"
     path = staged_dir / filename
-    frontmatter = (
-        "---\n"
-        f"name: {item['title']}\n"
-        f"description: {item['title']}\n"
-        f"type: {item['type']}\n"
-        f"staged_at: {time.strftime('%Y-%m-%dT%H:%M:%S')}\n"
-        f"staged_from_session: {session_id[:8]}\n"
-        f"reason: {item['reason']}\n"
-        f"evidence: {item['evidence']}\n"
-        "---\n\n"
-        f"{item['body']}\n"
-    )
+    fm_lines = [
+        f"name: {item['title']}",
+        f"description: {item['title']}",
+        f"type: {item['type']}",
+        f"staged_at: {time.strftime('%Y-%m-%dT%H:%M:%S')}",
+        f"staged_from_session: {session_id[:8]}",
+        f"reason: {item['reason']}",
+        f"evidence: {item['evidence']}",
+    ]
+    # Sprint 14: memory compiler 가 부착한 update 메타 보존. review CLI 가
+    # update_of 보고 diff/approve 분기.
+    if item.get("update_of"):
+        fm_lines.append(f"update_of: {item['update_of']}")
+    if item.get("diff_summary"):
+        fm_lines.append(f"diff_summary: {item['diff_summary']}")
+    frontmatter = "---\n" + "\n".join(fm_lines) + "\n---\n\n" + f"{item['body']}\n"
     try:
         path.write_text(frontmatter, encoding="utf-8")
         return path
@@ -124,6 +128,21 @@ def main() -> int:
         if not candidates:
             _debug(f"no candidates for {sid[:8]}")
             return 0
+
+        # Sprint 14: opt-in auto compile — 기존 memory 와 매칭되는 후보는
+        # Gemma 가 정제해 update_of 메타 부착. env MV2_AUTO_COMPILE=1 일 때만.
+        # 정제 실패는 silent — 원본 candidate 그대로 staged 처리.
+        try:
+            from memory_compiler import auto_compile_enabled, compile_candidates
+            if auto_compile_enabled():
+                before = sum(1 for c in candidates if not c.get("update_of"))
+                candidates = compile_candidates(candidates)
+                updates = sum(1 for c in candidates if c.get("update_of"))
+                _debug(
+                    f"compiled session={sid[:8]} updates={updates}/{before}"
+                )
+        except Exception as e:
+            _debug(f"compile skipped: {type(e).__name__}: {e}")
 
         slugs = existing_slugs()
         written = 0

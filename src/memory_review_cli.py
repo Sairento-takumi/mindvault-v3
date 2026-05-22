@@ -2,8 +2,10 @@
 """MindVault v2 Sprint 3 — /memory review CLI.
 
 하위 명령:
-  list                     → staged 후보 JSON 출력
-  approve <filename>       → staged → memory/ 이동 + MEMORY.md 한 줄 append
+  list                     → staged 후보 JSON 출력 (update 후보면 update_of 표시)
+  diff <filename>          → Sprint 14: update 후보의 기존 vs 정제 본문 unified diff
+  approve <filename>       → staged → memory/ 이동 + MEMORY.md 한 줄 append.
+                             Sprint 14: update_of 메타 있으면 기존 .bak 백업 + body overwrite
   reject  <filename>       → staged 파일 삭제
   prune                    → 30일 경과 staged 삭제
 """
@@ -119,6 +121,99 @@ def _promote_target_dir(meta_type: str) -> Path:
     return MEMORY_DIR
 
 
+def _allowed_update_roots() -> list[Path]:
+    """update_of safety check 용 root 목록. memory_indexer 의 정책과 동일."""
+    try:
+        sys.path.insert(0, str(Path(__file__).parent))
+        from memory_indexer import DEFAULT_MEMORY_DIRS, _extra_memory_dirs
+        return [*DEFAULT_MEMORY_DIRS, *_extra_memory_dirs()]
+    except Exception:
+        # fallback — 현재 모듈의 MEMORY_DIR 만 허용
+        return [MEMORY_DIR]
+
+
+def _is_safe_update_target(target: Path) -> bool:
+    """target 이 허용된 메모리 root 의 하위인지 (symlink resolve 후) 검증."""
+    try:
+        resolved = target.resolve(strict=False)
+    except OSError:
+        return False
+    for root in _allowed_update_roots():
+        try:
+            resolved.relative_to(root.resolve(strict=False))
+            return True
+        except ValueError:
+            continue
+    return False
+
+
+def _read_existing_body(path: Path) -> str:
+    """기존 memory 파일에서 본문(frontmatter 제외) 추출. 없으면 빈 문자열."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    _, body = parse_frontmatter(text)
+    return body or ""
+
+
+def cmd_diff(filename: str) -> int:
+    """Sprint 14: staged 후보가 update_of 가지면 기존 vs 정제 unified diff 출력.
+
+    update_of 없으면 신규 후보임을 알리고 staged 본문 표시.
+    """
+    src = _safe_staged_path(filename)
+    if src is None:
+        sys.stdout.write(json.dumps({"ok": False, "error": "invalid filename"}))
+        return 0
+    if not src.is_file():
+        sys.stdout.write(json.dumps({"ok": False, "error": "not found"}))
+        return 0
+    try:
+        text = src.read_text(encoding="utf-8")
+        meta, body = parse_frontmatter(text)
+        update_of = (meta.get("update_of") or "").strip()
+        if not update_of:
+            sys.stdout.write(json.dumps({
+                "ok": True,
+                "kind": "new",
+                "title": meta.get("name", src.stem),
+                "body": body.strip(),
+            }, ensure_ascii=False))
+            return 0
+        target = Path(update_of)
+        if not _is_safe_update_target(target):
+            sys.stdout.write(json.dumps({
+                "ok": False,
+                "error": "unsafe update target",
+                "target": update_of,
+            }))
+            return 0
+        existing = _read_existing_body(target) if target.is_file() else ""
+        sys.path.insert(0, str(Path(__file__).parent))
+        try:
+            from memory_compiler import unified_diff_text
+            diff = unified_diff_text(existing, body)
+        except Exception as e:
+            _debug(f"diff render fail: {e}")
+            diff = ""
+        sys.stdout.write(json.dumps({
+            "ok": True,
+            "kind": "update",
+            "title": meta.get("name", src.stem),
+            "update_of": update_of,
+            "diff_summary": meta.get("diff_summary", ""),
+            "existing_len": len(existing),
+            "compiled_len": len(body),
+            "unified_diff": diff,
+        }, ensure_ascii=False))
+        return 0
+    except Exception as e:
+        _debug(f"diff FATAL {filename}: {e}")
+        sys.stdout.write(json.dumps({"ok": False, "error": str(e)}))
+        return 0
+
+
 def cmd_approve(filename: str) -> int:
     src = _safe_staged_path(filename)
     if src is None:
@@ -132,6 +227,64 @@ def cmd_approve(filename: str) -> int:
         meta, body = parse_frontmatter(text)
         slug = _promoted_slug(filename)
         meta_type = meta.get("type", "feedback")
+        update_of = (meta.get("update_of") or "").strip()
+
+        # Sprint 14: update flow — 기존 파일 백업 후 overwrite. 기존 frontmatter 의
+        # name/description/type 보존, body 만 정제본으로 교체. INDEX_MD 추가 append
+        # 안 함 (slug 이미 존재).
+        if update_of:
+            target = Path(update_of)
+            if not _is_safe_update_target(target):
+                sys.stdout.write(json.dumps({
+                    "ok": False,
+                    "error": "unsafe update target",
+                    "target": update_of,
+                }))
+                return 0
+            if not target.is_file():
+                # 기존 파일이 사라졌다면 신규 promotion 으로 fallback
+                update_of = ""
+            else:
+                bak = target.with_suffix(target.suffix + ".bak")
+                try:
+                    bak.write_text(
+                        target.read_text(encoding="utf-8"), encoding="utf-8"
+                    )
+                except OSError as e:
+                    _debug(f"backup write fail {target}: {e}")
+                    sys.stdout.write(json.dumps({
+                        "ok": False, "error": f"backup fail: {e}",
+                    }))
+                    return 0
+                existing_meta, _ = parse_frontmatter(
+                    target.read_text(encoding="utf-8")
+                )
+                final_fm = (
+                    "---\n"
+                    f"name: {existing_meta.get('name', meta.get('name', slug))}\n"
+                    f"description: {existing_meta.get('description', meta.get('description', slug))}\n"
+                    f"type: {existing_meta.get('type', meta_type)}\n"
+                    "---\n\n"
+                    f"{body.rstrip()}\n"
+                )
+                target.write_text(final_fm, encoding="utf-8")
+                src.unlink()
+                reindex_info: dict = {}
+                try:
+                    from memory_indexer import incremental_index  # noqa: WPS433
+                    reindex_info = incremental_index()
+                except Exception as e:
+                    _debug(f"approve update reindex skip: {type(e).__name__}: {e}")
+                    reindex_info = {"skipped": "reindex failed", "error": str(e)}
+                sys.stdout.write(json.dumps({
+                    "ok": True,
+                    "kind": "update",
+                    "target": str(target),
+                    "backup": str(bak),
+                    "reindex": reindex_info,
+                }, ensure_ascii=False))
+                return 0
+
         target_dir = _promote_target_dir(meta_type)
         target_dir.mkdir(parents=True, exist_ok=True)
         target = target_dir / f"{slug}.md"
@@ -215,11 +368,13 @@ def cmd_prune() -> int:
 def main() -> int:
     try:
         if len(sys.argv) < 2:
-            sys.stdout.write(json.dumps({"error": "usage: list|approve|reject|prune"}))
+            sys.stdout.write(json.dumps({"error": "usage: list|diff|approve|reject|prune"}))
             return 0
         sub = sys.argv[1]
         if sub == "list":
             return cmd_list()
+        if sub == "diff" and len(sys.argv) >= 3:
+            return cmd_diff(sys.argv[2])
         if sub == "approve" and len(sys.argv) >= 3:
             return cmd_approve(sys.argv[2])
         if sub == "reject" and len(sys.argv) >= 3:
