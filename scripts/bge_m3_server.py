@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import sys
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -33,18 +34,24 @@ _model = load_model(MODEL_DIR)
 if isinstance(_model, tuple):
     _model = _model[0]
 _tokenizer = load_tokenizer(MODEL_DIR)
+# mlx-embeddings 모델은 thread-safe 아님 (Metal GPU command queue race).
+# ThreadingHTTPServer로 헬스체크는 동시 응답하되, embed forward는 직렬화.
+_model_lock = threading.Lock()
 log.info("BGE-M3 ready on %s:%d", HOST, PORT)
 
 
 def embed(text: str) -> list[float]:
-    """텍스트 → 1024차원 dense 벡터 (mean pooled)."""
+    """텍스트 → 1024차원 dense 벡터 (mean pooled). Thread-safe via lock."""
     if len(text) > MAX_INPUT_CHARS:
         text = text[:MAX_INPUT_CHARS]
-    tokens = _tokenizer.encode(text)
-    input_ids = mx.array([tokens])
-    output = _model(input_ids)
-    pooled = output.last_hidden_state.mean(axis=1)
-    return pooled[0].tolist()
+    with _model_lock:
+        tokens = _tokenizer.encode(text)
+        input_ids = mx.array([tokens])
+        output = _model(input_ids)
+        pooled = output.last_hidden_state.mean(axis=1)
+        # mx.eval로 GPU 작업 완료 보장 후 list 변환
+        mx.eval(pooled)
+        return pooled[0].tolist()
 
 
 class Handler(BaseHTTPRequestHandler):
