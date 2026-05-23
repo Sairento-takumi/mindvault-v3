@@ -117,6 +117,120 @@ class TestFindExistingMemory(unittest.TestCase):
         self.assertEqual(out["path"].stem, "other_name")
 
 
+class TestEmbeddingFallback(unittest.TestCase):
+    """Sprint NEXT-2 — 3순위 embedding 의미 매칭."""
+
+    def _make_memory_dir(self, files: dict[str, str]) -> Path:
+        d = Path(tempfile.mkdtemp())
+        for name, content in files.items():
+            (d / name).write_text(content, encoding="utf-8")
+        return d
+
+    def _mock_db_with_rows(self, rows: list[tuple[str, str, bytes]]):
+        """conn.execute(...).__iter__ → row dict 시뮬레이션. memories_vec 모킹용."""
+        import sqlite3
+        # 메모리 sqlite 에 실제 테이블 만들고 rows insert — 가장 robust
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            "CREATE TABLE memories_vec (path TEXT, kind TEXT, embedding BLOB)"
+        )
+        conn.executemany(
+            "INSERT INTO memories_vec(path, kind, embedding) VALUES (?,?,?)",
+            rows,
+        )
+        conn.commit()
+        return conn
+
+    def test_embedding_hit_above_threshold(self):
+        import memory_compiler
+        import memory_indexer
+        import indexer
+        import numpy as np
+        d = self._make_memory_dir({
+            "topic_one.md": (
+                "---\nname: claude-bg-syntax\ndescription: x\n---\n"
+                "claude --bg 명령 사용법"
+            ),
+        })
+        # 같은 방향 벡터 → cosine ≈ 1.0 > threshold
+        vec = (np.ones(1024, dtype=np.float32) / np.float32(np.sqrt(1024))).astype(np.float32)
+        path_str = str((d / "topic_one.md").resolve())
+        rows = [(path_str, "passage", vec.tobytes())]
+        conn = self._mock_db_with_rows(rows)
+        cand = {
+            "title": "백그라운드 세션 시작",
+            "body": "claude --bg 으로 백그라운드 실행",
+        }
+        # 모듈 attribute 호출 → patch.object 로 깨끗하게 격리
+        with patch.object(
+            memory_indexer, "embed_text", lambda text, kind="passage": vec.tolist()
+        ), patch.object(indexer, "open_db", lambda: conn):
+            try:
+                out = memory_compiler._find_existing_memory(cand, [d])
+            finally:
+                conn.close()
+        self.assertIsNotNone(out)
+        self.assertEqual(out["path"].name, "topic_one.md")
+        self.assertEqual(out.get("match_kind"), "embedding")
+        self.assertGreaterEqual(out["cosine"], memory_compiler.EMBED_MATCH_THRESHOLD)
+
+    def test_embedding_miss_below_threshold(self):
+        import memory_compiler
+        import memory_indexer
+        import indexer
+        import numpy as np
+        d = self._make_memory_dir({
+            "topic_one.md": (
+                "---\nname: claude-bg-syntax\ndescription: x\n---\n본문"
+            ),
+        })
+        # 직교 벡터 → cosine = 0 < 0.75
+        vec_db = np.zeros(1024, dtype=np.float32); vec_db[0] = 1.0
+        vec_q = np.zeros(1024, dtype=np.float32); vec_q[1] = 1.0
+        path_str = str((d / "topic_one.md").resolve())
+        rows = [(path_str, "passage", vec_db.tobytes())]
+        conn = self._mock_db_with_rows(rows)
+        cand = {"title": "전혀 다른 주제", "body": "다른 사실"}
+        with patch.object(
+            memory_indexer, "embed_text", lambda text, kind="passage": vec_q.tolist()
+        ), patch.object(indexer, "open_db", lambda: conn):
+            try:
+                out = memory_compiler._find_existing_memory(cand, [d])
+            finally:
+                conn.close()
+        self.assertIsNone(out)
+
+    def test_embedding_called_only_after_name_slug_fail(self):
+        """name 또는 slug 매칭이 있으면 embedding 호출 안 함 (cost 보호)."""
+        import memory_compiler
+        import memory_indexer
+        d = self._make_memory_dir({
+            "claude_bg_syntax.md": (
+                "---\nname: claude-bg-syntax\ndescription: x\n---\nbody"
+            ),
+        })
+        cand = {"title": "claude-bg-syntax", "body": "fact"}
+        call_count = {"n": 0}
+        def fake_embed(text, kind="passage"):
+            call_count["n"] += 1
+            return [0.0] * 1024
+        with patch.object(memory_indexer, "embed_text", fake_embed):
+            out = memory_compiler._find_existing_memory(cand, [d])
+        self.assertIsNotNone(out)
+        self.assertEqual(call_count["n"], 0, "name 매칭됐는데 embedding 호출됨")
+
+    def test_embedding_failure_returns_none_gracefully(self):
+        """embed_text 가 None 반환 (서버 다운) → 매칭 없음, 예외 안 던짐."""
+        import memory_compiler
+        import memory_indexer
+        d = self._make_memory_dir({})  # 빈 dir — name/slug 매칭 없음
+        cand = {"title": "어떤 주제", "body": "어떤 본문"}
+        with patch.object(memory_indexer, "embed_text", lambda text, kind="passage": None):
+            out = memory_compiler._find_existing_memory(cand, [d])
+        self.assertIsNone(out)
+
+
 class TestCompileCandidates(unittest.TestCase):
     def _setup_dir(self):
         d = Path(tempfile.mkdtemp())

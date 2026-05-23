@@ -187,7 +187,7 @@ v2.9 베이스라인 + v3 target + Sprint 13~16 자율 실행 후 실측 (Sprint
 | procedural memory coverage | 0% (slot 없음) | 70%+ 형 자주 쓰는 명령어 | **0%** baseline (695 bash / 42 binary, `--procedural-audit --hours 720`) — Sprint 13 인프라 + NEXT-1 자동 trigger 휴리스틱(special_binary OR non_trivial + NEXT_ACTION) 완성. 운영 누적 후 재측 예정 |
 | 자기 모순 메모리 감지율 | 0% | 80%+ | **8건 후보 탐지** (`scan_self_affirming_memories`) — §1.4 echo chamber 의 "MindVault v1 폐기 / v2 운영" 메모리 직접 발견 |
 | session-end auto compile latency | N/A | <10s (Gemma local) | 미측정 (`MV2_AUTO_COMPILE` opt-in 단계, 운영 fire 0건) |
-| duplicate memory | 미측정 | 0 | **name-dup 0, stem-collision 1** (project_mindvault) — `dedup_cli.py` 인프라 완성, stem 충돌 1건은 형 검토 영역 |
+| duplicate memory | 미측정 | 0 | **name-dup 0, stem-collision 1** (project_mindvault) — `dedup_cli.py` 인프라 완성, stem 충돌 1건은 형 검토 영역. NEXT-2 embedding fallback (`_find_by_embedding`, cosine ≥ 0.75) 추가로 자연어 변형도 같은 메모리로 update 수렴 가능 — 신규 staged 쌓임 ↓ 예상 |
 | test isolation | 5 fail (master 35c33f3) | 0 fail | **0 fail** ✓ (`63f32df` 에서 pre-existing 결함 5건 모두 해소) |
 
 ---

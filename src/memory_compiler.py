@@ -47,6 +47,11 @@ GEMMA_TIMEOUT = 45
 COMPILE_BODY_LIMIT = 500  # update 결과 본문 최대 글자 수 (soft hint to Gemma)
 COMPILE_BODY_HARD_LIMIT = 1200  # 실제 trim 한계
 ENABLE_AUTO_COMPILE_ENV = "MV2_AUTO_COMPILE"
+# Sprint NEXT-2 — embedding fallback. name exact·slug 매칭이 모두 실패했을 때
+# candidate body 임베딩과 memories_vec cosine top-1 이 이 임계값 이상이면
+# 같은 주제로 본다. 0.75 는 memory_search 의 raw_cosine 게이트(0.40/0.32) 보다
+# 한참 엄격 — false-merge 로 무관 메모리 overwrite 되는 위험을 막기 위한 보수치.
+EMBED_MATCH_THRESHOLD = 0.75
 
 # session_memory_end 의 slugify 와 동등 — 매칭 일관성. unit test 가 동등성 보장.
 SLUG_CHAR_RE = re.compile(r"[^\w가-힣\-]")
@@ -112,6 +117,7 @@ def _find_existing_memory(
     매칭 우선순위:
     1. frontmatter name 완전 일치 (lowercase strip)
     2. slugify(title) == _candidate_slug(stem)
+    3. embedding cosine top-1 ≥ EMBED_MATCH_THRESHOLD (의미 매칭, Sprint NEXT-2)
     """
     new_name = (candidate.get("title") or "").strip().lower()
     new_slug = slugify(candidate.get("title") or "")
@@ -134,7 +140,100 @@ def _find_existing_memory(
         # 2순위: slug 일치 (fallback)
         if existing_slug == new_slug and fallback_match is None:
             fallback_match = {"path": p, "frontmatter": fm, "body": body}
-    return fallback_match
+    if fallback_match is not None:
+        return fallback_match
+    # 3순위: embedding 의미 매칭. 임베딩 서버·numpy·DB 미가용 시 silently None.
+    try:
+        return _find_by_embedding(candidate, memory_dirs)
+    except Exception as e:
+        _debug(f"embed match fail: {type(e).__name__} {e}")
+        return None
+
+
+def _find_by_embedding(
+    candidate: dict, memory_dirs: list[Path]
+) -> dict | None:
+    """candidate body 임베딩과 memories_vec cosine top-1 매칭.
+
+    threshold EMBED_MATCH_THRESHOLD 미달이면 None — false-merge 차단.
+    embed_text 또는 DB 호출 실패는 None 으로 폴백 (Sprint 11 패턴).
+    """
+    body = (candidate.get("body") or "").strip()
+    if not body:
+        return None
+    title = (candidate.get("title") or "").strip()
+    query_text = f"{title}\n{body}" if title else body
+    # lazy import — memory_indexer/numpy 가 없는 환경(테스트) 에서 모듈 import 자체는
+    # 깨지지 않게 함수 안에서 시도. 모듈 attribute 호출 패턴이라
+    # 테스트에서 `patch.object(memory_indexer, 'embed_text', ...)` 자연스럽게 적용.
+    try:
+        import memory_indexer  # type: ignore  # noqa: E402
+        import indexer  # type: ignore  # noqa: E402
+        import numpy as np  # type: ignore  # noqa: E402
+    except Exception as e:
+        _debug(f"embed deps unavailable: {e}")
+        return None
+    qvec = memory_indexer.embed_text(query_text, kind="passage")
+    if not qvec:
+        return None
+    conn = indexer.open_db()
+    try:
+        rows = list(
+            conn.execute("SELECT path, kind, embedding FROM memories_vec")
+        )
+    finally:
+        conn.close()
+    if not rows:
+        return None
+    q = np.asarray(qvec, dtype=np.float32)
+    q_norm = float(np.linalg.norm(q))
+    if q_norm == 0:
+        return None
+    q = q / q_norm
+    best_path: str | None = None
+    best_sim = -1.0
+    for r in rows:
+        arr = np.frombuffer(r["embedding"], dtype=np.float32)
+        if arr.size == 0:
+            continue
+        a_norm = float(np.linalg.norm(arr))
+        if a_norm == 0:
+            continue
+        sim = float((arr / a_norm) @ q)
+        if sim > best_sim:
+            best_sim = sim
+            best_path = r["path"]
+    if best_path is None or best_sim < EMBED_MATCH_THRESHOLD:
+        return None
+    p = Path(best_path)
+    if not p.is_file():
+        return None
+    # path traversal 방어 — memory_dirs 루트 안 path 만 허용
+    if not any(_is_within(p, d) for d in memory_dirs):
+        _debug(f"embed match path outside roots: {p}")
+        return None
+    try:
+        text_content = p.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    fm, body_ex = parse_frontmatter(text_content)
+    _debug(f"embed match cosine={best_sim:.3f} path={p}")
+    return {
+        "path": p,
+        "frontmatter": fm,
+        "body": body_ex,
+        "match_kind": "embedding",
+        "cosine": best_sim,
+    }
+
+
+def _is_within(p: Path, root: Path) -> bool:
+    """p 가 root 디렉토리 내부 (또는 동일) 인지. is_relative_to 폴리필."""
+    try:
+        p.resolve().relative_to(root.resolve())
+        return True
+    except (ValueError, OSError):
+        return False
 
 
 def _build_compile_prompt(existing_body: str, candidate: dict) -> str:
