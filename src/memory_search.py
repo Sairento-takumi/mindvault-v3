@@ -38,6 +38,11 @@ DESCRIPTION_WEIGHT = 1.5
 DEFAULT_TOP_K = 1  # 보수적: 절대 우수한 1건만. V1 토큰 낭비 회피.
 DEFAULT_THRESHOLD = 0.65  # normalize 후 점수 게이트 (보조)
 DEFAULT_RAW_COSINE_MIN = 0.40  # Sprint 9 Arctic-ko 분포에 맞춰 재튜닝 (도메인 0.44~0.61 vs 잡담 0.23~0.34, gap 0.26)
+# Sprint NEXT-4 — procedural type 별 게이트 보너스. 명령어 syntax 메모리는
+# specific keyword 매칭 강도가 일반 결정·프로젝트 메모리보다 엄격해야 정확함.
+# default(0.40) → procedural 0.45, hinted(0.32) → procedural 0.37 로 자동 분리.
+PROCEDURAL_GATE_BONUS = 0.05
+PROCEDURAL_PATH_MARKER = "/_procedural/"
 EMBED_DIM = 1024
 SNIPPET_CHARS = 600
 # Sprint 11: 160→600. 회수 1건만 출력하므로 토큰 부담은 ~150 tokens 증가.
@@ -269,6 +274,20 @@ def _resolve_wikilink(conn: sqlite3.Connection, slug: str) -> dict | None:
     return None
 
 
+def _is_procedural_path(path: str) -> bool:
+    """memory path 가 _procedural/ slot 안인지. Sprint NEXT-4 type 게이트 분기."""
+    return PROCEDURAL_PATH_MARKER in (path or "")
+
+
+def _gate_for_path(path: str, base_min: float) -> float:
+    """type 별 raw_cosine 게이트. procedural 은 +PROCEDURAL_GATE_BONUS 엄격."""
+    if base_min <= 0:
+        return base_min
+    if _is_procedural_path(path):
+        return base_min + PROCEDURAL_GATE_BONUS
+    return base_min
+
+
 WIKILINK_GATE_FACTOR = 0.75
 # Sprint 11: wikilink target의 raw_cosine이 raw_cosine_min × 0.75 미만이면 expand 차단.
 # 예: raw_cosine_min=0.40 → wikilink 게이트=0.30. query와 가장 약하게라도 관련된
@@ -296,7 +315,6 @@ def _expand_wikilinks(
     """
     if max_expansion <= 0 or not results:
         return []
-    gate = raw_cosine_min * WIKILINK_GATE_FACTOR if raw_cosine_min > 0 else 0.0
     seen_paths = {r["path"] for r in results}
     seen_slugs: set[str] = set()
     expanded: list[dict] = []
@@ -318,6 +336,10 @@ def _expand_wikilinks(
             if not resolved or resolved["path"] in seen_paths:
                 continue
             target_raw = raw_cosine_map.get(resolved["path"], 0.0)
+            # Sprint NEXT-4: target type 별 게이트 분기. procedural target 은
+            # base 보너스 + WIKILINK_GATE_FACTOR 둘 다 적용 → 더 엄격.
+            path_base = _gate_for_path(resolved["path"], raw_cosine_min)
+            gate = path_base * WIKILINK_GATE_FACTOR if path_base > 0 else 0.0
             if gate > 0 and target_raw < gate:
                 _debug(
                     f"wikilink gate block slug={slug} target_raw={target_raw:.3f} "
@@ -389,12 +411,14 @@ def recall_memory(
         # normalize score는 ranking signal로만 사용 (절대 차단 X).
         vec_available = bool(raw_cosine_map)
         kept = []
-        fts_gate = raw_cosine_min * 0.5 if raw_cosine_min > 0 else 0.0
         for path, info in combined.items():
             raw = raw_cosine_map.get(path, 0.0)
             if raw_cosine_min > 0 and vec_available:
+                # Sprint NEXT-4: type 별 게이트 — procedural 은 +0.05 엄격.
+                # specific keyword 매칭 강도가 일반 결정 메모리보다 필요한 영역.
+                path_gate = _gate_for_path(path, raw_cosine_min)
                 has_vec = "vec" in info["source"]
-                threshold = raw_cosine_min if has_vec else fts_gate
+                threshold = path_gate if has_vec else path_gate * 0.5
                 if raw < threshold:
                     continue
             kept.append((path, info, raw))

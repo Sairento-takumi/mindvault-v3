@@ -147,5 +147,42 @@ class TestRecallMemory(unittest.TestCase):
         self.assertIn("vec", all_sources)
 
 
+class TestProceduralTypeGate(unittest.TestCase):
+    """Sprint NEXT-4 — procedural path 는 raw_cosine 게이트가 +0.05 엄격."""
+
+    def test_is_procedural_path(self):
+        from memory_search import _is_procedural_path
+        self.assertTrue(_is_procedural_path("/x/_procedural/y.md"))
+        self.assertTrue(
+            _is_procedural_path(
+                "/Users/me/.claude/projects/-Users-me-my-folder/memory/_procedural/launchctl.md"
+            )
+        )
+        self.assertFalse(_is_procedural_path("/x/memory/topic.md"))
+        self.assertFalse(_is_procedural_path(""))
+
+    def test_gate_for_path_procedural_bonus(self):
+        from memory_search import _gate_for_path, PROCEDURAL_GATE_BONUS
+        # default
+        self.assertAlmostEqual(
+            _gate_for_path("/x/_procedural/y.md", 0.40),
+            0.40 + PROCEDURAL_GATE_BONUS,
+        )
+        # hinted
+        self.assertAlmostEqual(
+            _gate_for_path("/x/_procedural/y.md", 0.32),
+            0.32 + PROCEDURAL_GATE_BONUS,
+        )
+        # non-procedural unchanged
+        self.assertAlmostEqual(
+            _gate_for_path("/x/memory/y.md", 0.40), 0.40
+        )
+
+    def test_gate_disabled_when_min_zero(self):
+        from memory_search import _gate_for_path
+        self.assertEqual(_gate_for_path("/x/_procedural/y.md", 0.0), 0.0)
+        self.assertEqual(_gate_for_path("/x/memory/y.md", 0.0), 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()
