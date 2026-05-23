@@ -150,14 +150,15 @@ def should_skip_recall(intent: IntentResult) -> bool:
 
 
 _GEMMA_INTENT_PROMPT = (
-    "다음 질문을 한 단어로 분류해라. 분류 라벨만 한 줄 출력 (해설 금지):\n"
-    "chat: 인사·잡담·날씨·기분\n"
-    "meta: Claude·세션·모델·버전·토큰 등 자기참조\n"
-    "code: 코드·파일·실행·디버그·테스트·빌드\n"
-    "recall: 과거 대화·결정·메모리 회수\n"
+    "다음 질문을 한 단어로 분류해라. 분류 라벨 한 단어만 즉시 출력. "
+    "thinking, 해설, 설명 모두 금지. 첫 토큰부터 라벨.\n"
+    "chat: 인사 잡담 날씨 기분\n"
+    "meta: Claude 세션 모델 버전 토큰 자기참조\n"
+    "code: 코드 파일 실행 디버그 테스트 빌드\n"
+    "recall: 과거 대화 결정 메모리 회수\n"
     "other: 그 외 작업 지시\n\n"
     "질문: {q}\n"
-    "분류:"
+    "라벨:"
 )
 
 _VALID_GEMMA_LABELS = {"chat", "meta", "code", "recall", "other"}
@@ -181,6 +182,10 @@ def _call_gemma_intent(prompt_text: str) -> str | None:
             ],
             "max_tokens": 8,
             "temperature": 0.0,
+            # Gemma 3 의 thinking 모드를 끄지 않으면 max_tokens 안에 라벨이
+            # 도달 못하고 reasoning trace ("Thinking Process: ...") 만 출력됨.
+            # mlx_lm.server chat template 인자로 비활성 — content 에 즉시 라벨.
+            "chat_template_kwargs": {"enable_thinking": False},
         }
     ).encode()
     req = urllib.request.Request(
@@ -199,7 +204,11 @@ def _call_gemma_intent(prompt_text: str) -> str | None:
         choices = data.get("choices") or []
         if not choices:
             return None
-        content = (choices[0].get("message") or {}).get("content") or ""
+        msg = choices[0].get("message") or {}
+        # mlx_lm.server 의 thinking-mode 응답은 message.content 가 빈 문자열이고
+        # raw trace 가 message.reasoning 필드에만 들어간다 (max_tokens 가 작아
+        # 라벨 도달 전에 토큰 소진되는 케이스). content 비면 reasoning fallback.
+        content = msg.get("content") or msg.get("reasoning") or ""
         return content.strip() or None
     except (
         TimeoutError,
@@ -216,14 +225,17 @@ _LABEL_TOKEN_RE = re.compile(r"[a-zA-Z]+")
 
 
 def _normalize_gemma_label(raw: str | None) -> str | None:
-    """Gemma 응답의 첫 영문 토큰을 lowercase 라벨로. 유효 라벨만 반환."""
+    """Gemma 응답에서 첫 유효 라벨 토큰 추출. reasoning trace 안에 'Thinking',
+    'The', 'I' 같은 비라벨 토큰이 먼저 등장해도 무시하고 valid label 만 잡는다.
+    유효 라벨이 하나도 없으면 None.
+    """
     if not raw:
         return None
-    m = _LABEL_TOKEN_RE.search(raw)
-    if not m:
-        return None
-    label = m.group(0).lower()
-    return label if label in _VALID_GEMMA_LABELS else None
+    for m in _LABEL_TOKEN_RE.finditer(raw):
+        label = m.group(0).lower()
+        if label in _VALID_GEMMA_LABELS:
+            return label
+    return None
 
 
 def classify_with_gemma(prompt: str) -> IntentResult | None:
