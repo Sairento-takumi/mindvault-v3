@@ -498,6 +498,110 @@ class TestLoadRecallEventsKindFilter(unittest.TestCase):
         self.assertEqual(only_skip[0]["kind"], "recall_skip")
 
 
+class TestExtractCommandBin(unittest.TestCase):
+    def test_simple_command(self):
+        from self_eval import _extract_command_bin
+        self.assertEqual(_extract_command_bin("git status"), "git")
+        self.assertEqual(_extract_command_bin("python3 -m pytest"), "python3")
+        self.assertEqual(
+            _extract_command_bin("claude --bg 'do this'"), "claude"
+        )
+
+    def test_skip_builtins(self):
+        from self_eval import _extract_command_bin
+        self.assertIsNone(_extract_command_bin("ls -la"))
+        self.assertIsNone(_extract_command_bin("cat file.txt"))
+        self.assertIsNone(_extract_command_bin("cd /tmp"))
+        self.assertIsNone(_extract_command_bin("rm -rf x"))
+
+    def test_skip_env_assignment(self):
+        from self_eval import _extract_command_bin
+        # 'X=Y' 가 첫 token 이면 명령어 아님
+        self.assertIsNone(_extract_command_bin("PATH=/x foo"))
+
+    def test_multiline_first_only(self):
+        from self_eval import _extract_command_bin
+        self.assertEqual(
+            _extract_command_bin("npm install\nnpm run build"),
+            "npm",
+        )
+
+
+class TestAuditProceduralCoverage(unittest.TestCase):
+    def _write_jsonl(self, path: Path, rows: list[dict]) -> Path:
+        path.write_text(
+            "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8"
+        )
+        return path
+
+    def test_coverage_basic(self):
+        from self_eval import audit_procedural_coverage
+        with tempfile.TemporaryDirectory() as proj_tmp, \
+             tempfile.TemporaryDirectory() as mem_tmp:
+            proj_root = Path(proj_tmp)
+            (proj_root / "s1").mkdir()
+            self._write_jsonl(proj_root / "s1" / "a.jsonl", [
+                {
+                    "type": "assistant",
+                    "timestamp": "2099-01-01T00:00:00Z",
+                    "message": {"content": [
+                        {
+                            "type": "tool_use", "name": "Bash",
+                            "input": {"command": "claude --bg 'foo'"},
+                        },
+                        {
+                            "type": "tool_use", "name": "Bash",
+                            "input": {"command": "git worktree add x"},
+                        },
+                        {
+                            "type": "tool_use", "name": "Read",
+                            "input": {"file_path": "/x"},  # Bash 아님 → skip
+                        },
+                    ]},
+                },
+            ])
+            mem_dir = Path(mem_tmp)
+            # procedural 슬롯 — claude 명령어 메모리
+            proc = mem_dir / "_procedural"
+            proc.mkdir()
+            (proc / "claude_bg.md").write_text(
+                "---\nname: claude bg\ntype: procedural\n---\n"
+                "claude --bg \"prompt\" — 백그라운드 세션",
+                encoding="utf-8",
+            )
+            # 일반 슬롯 — git 명령어 본문
+            (mem_dir / "git_notes.md").write_text(
+                "---\nname: git notes\n---\ngit worktree add 패턴",
+                encoding="utf-8",
+            )
+            out = audit_procedural_coverage(
+                projects_root=proj_root,
+                memory_dirs=[mem_dir],
+                hours_back=24 * 365 * 100,
+                top_n=5,
+            )
+            self.assertEqual(out["total_bash_commands_examined"], 2)
+            # procedural_memory_count: _procedural slot 의 claude_bg (1건)
+            # git_notes 는 type=procedural 아니라 카운트 X
+            self.assertEqual(out["procedural_memory_count"], 1)
+            # claude 매칭 — covered. git: 본문에 'git worktree' 있지만
+            # procedural 후보 0건이라 git 은 매칭 후보가 git_notes 가 아닌
+            # _procedural slot 의 claude_bg 만 본다. claude_bg body 에 'git' 없음 → 미커버
+            covered_cmds = {row["command"] for row in out["table"] if row["covered"]}
+            self.assertEqual(covered_cmds, {"claude"})
+            self.assertIn("git", {row["command"] for row in out["table"]})
+
+    def test_no_commands(self):
+        from self_eval import audit_procedural_coverage
+        with tempfile.TemporaryDirectory() as proj_tmp:
+            out = audit_procedural_coverage(
+                projects_root=Path(proj_tmp), memory_dirs=[],
+            )
+            self.assertEqual(out["total_bash_commands_examined"], 0)
+            self.assertEqual(out["unique_binaries"], 0)
+            self.assertEqual(out["coverage_ratio"], 0.0)
+
+
 class TestClassifyUserTurns(unittest.TestCase):
     def test_classifies_and_buckets(self):
         from self_eval import classify_user_turns

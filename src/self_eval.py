@@ -167,6 +167,165 @@ def _intent_stats_from_events(
     }
 
 
+def _iter_bash_commands(projects_root: Path, since_unix: float):
+    """모든 jsonl assistant turn 의 Bash tool_use input.command 순회.
+
+    yields (ts_unix, command_str). Bash 외 tool (Read, Edit, ...) 은 명령어 분석 대상 X.
+    """
+    for jp in iter_session_jsonl_paths(projects_root):
+        try:
+            with jp.open(encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        d = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if d.get("type") != "assistant":
+                        continue
+                    ts = _parse_ts(d.get("timestamp", ""))
+                    if ts is None or ts < since_unix:
+                        continue
+                    content = (d.get("message") or {}).get("content")
+                    if not isinstance(content, list):
+                        continue
+                    for b in content:
+                        if not isinstance(b, dict):
+                            continue
+                        if b.get("type") != "tool_use" or b.get("name") != "Bash":
+                            continue
+                        inp = b.get("input") or {}
+                        cmd = inp.get("command")
+                        if isinstance(cmd, str) and cmd.strip():
+                            yield ts, cmd.strip()
+        except OSError:
+            continue
+
+
+# 명령어 첫 token 추출용. shell builtin (cd, echo, sleep) + 흔한 pipeline 잡음 제외
+_BIN_TOKEN_RE = re.compile(r"^([A-Za-z_][\w.-]*)")
+_SKIP_BINS = {
+    # shell builtin / 사소한 잡음
+    "cd", "pwd", "echo", "printf", "true", "false", "exit", "return",
+    "sleep", "test", "if", "then", "fi", "for", "while", "do", "done",
+    "alias", "export", "unset", "source", "read", "set",
+    # 단순 viewer
+    "cat", "head", "tail", "less", "more", "wc", "tr", "cut", "sort", "uniq",
+    "grep", "rg", "find", "fd", "awk", "sed", "ls", "stat", "file",
+    # path manipulation
+    "basename", "dirname", "realpath", "mkdir", "touch", "rm", "cp", "mv", "ln",
+    # 흔한 utility
+    "date", "which", "type", "command", "env", "uname", "id",
+}
+
+
+def _extract_command_bin(cmd: str) -> str | None:
+    """명령어 첫 token (실행 binary 이름). 의미 있는 명령어만 반환.
+
+    파이프·redirection 등 노이즈 잘려 첫 단어만 본다. shell builtin 은 skip.
+    `claude --bg`, `git worktree`, `npm install`, `python3 ...` 같은 진짜 명령어만.
+    `PATH=/x foo`, `ENV=val cmd` 같은 env var assignment 도 skip.
+    """
+    stripped = cmd.lstrip()
+    first_line = stripped.split("\n", 1)[0]
+    first_line = re.sub(r"\$\([^)]*\)", "", first_line)
+    # env var assignment 패턴 (`NAME=value` 가 첫 token) 검사
+    first_token_str = first_line.split(None, 1)[0] if first_line.split() else ""
+    if "=" in first_token_str:
+        return None
+    m = _BIN_TOKEN_RE.match(first_line)
+    if not m:
+        return None
+    bin_name = m.group(1)
+    if bin_name in _SKIP_BINS:
+        return None
+    return bin_name
+
+
+def audit_procedural_coverage(
+    projects_root: Path = DEFAULT_PROJECTS_ROOT,
+    memory_dirs: list[Path] | None = None,
+    hours_back: int = 720,  # 30일 기본 — 더 넓은 표본
+    top_n: int = 20,
+) -> dict:
+    """Bash tool_use 명령어 분포 + procedural memory 보유 여부.
+
+    coverage = (top_n 명령어 중 procedural slot 또는 본문에 명령어 포함된 메모리 보유) /
+               top_n.
+
+    procedural slot 후보 = path 에 `/_procedural/` 포함 OR frontmatter type=procedural.
+    매칭: 명령어 이름이 memory name 또는 body 에 등장.
+    """
+    sys.path.insert(0, str(Path(__file__).parent))
+    from memory_indexer import (  # noqa: WPS433
+        DEFAULT_MEMORY_DIRS as _DEF_DIRS,
+        _extra_memory_dirs as _xtra,
+        _collect_md_files as _collect,
+        parse_frontmatter as _parse_fm,
+    )
+    if memory_dirs is None:
+        memory_dirs = _DEF_DIRS + _xtra()
+    since = time.time() - hours_back * 3600
+
+    from collections import Counter
+    counter: Counter[str] = Counter()
+    for _ts, cmd in _iter_bash_commands(projects_root, since):
+        bin_name = _extract_command_bin(cmd)
+        if bin_name:
+            counter[bin_name] += 1
+
+    top = counter.most_common(top_n)
+
+    # procedural 메모리 후보 인벤토리
+    proc_memos: list[dict] = []
+    for p in _collect(memory_dirs):
+        is_proc_slot = "/_procedural/" in str(p)
+        try:
+            text = p.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        fm, body = _parse_fm(text)
+        is_proc_type = (fm.get("type") or "").strip().lower() == "procedural"
+        if is_proc_slot or is_proc_type:
+            proc_memos.append({
+                "path": str(p),
+                "name": (fm.get("name") or p.stem),
+                "body_lower": body.lower(),
+            })
+
+    # 매칭
+    coverage_table: list[dict] = []
+    covered = 0
+    for bin_name, n in top:
+        name_lower = bin_name.lower()
+        memos_matched = [
+            m["name"] for m in proc_memos
+            if name_lower in m["name"].lower() or name_lower in m["body_lower"]
+        ]
+        is_covered = bool(memos_matched)
+        coverage_table.append({
+            "command": bin_name,
+            "usage_count": n,
+            "covered": is_covered,
+            "matched_memories": memos_matched[:3],
+        })
+        if is_covered:
+            covered += 1
+
+    return {
+        "hours_back": hours_back,
+        "total_bash_commands_examined": sum(counter.values()),
+        "unique_binaries": len(counter),
+        "top_n": top_n,
+        "procedural_memory_count": len(proc_memos),
+        "coverage_ratio": (covered / top_n) if top_n else 0.0,
+        "covered": covered,
+        "table": coverage_table,
+    }
+
+
 def classify_user_turns(
     projects_root: Path = DEFAULT_PROJECTS_ROOT,
     hours_back: int = 168,
@@ -671,10 +830,21 @@ def main() -> int:
         action="store_true",
         help="user turn 전체에 classify 돌려 분포 + 표본 출력 (운영 검증)",
     )
+    parser.add_argument(
+        "--procedural-audit",
+        action="store_true",
+        help="Bash tool_use 명령어 분포 + procedural memory coverage 측정",
+    )
     args = parser.parse_args()
     try:
         if args.classifier_audit:
             out = classify_user_turns(
+                projects_root=args.projects_root, hours_back=args.hours
+            )
+            json.dump(out, sys.stdout, ensure_ascii=False, indent=2)
+            return 0
+        if args.procedural_audit:
+            out = audit_procedural_coverage(
                 projects_root=args.projects_root, hours_back=args.hours
             )
             json.dump(out, sys.stdout, ensure_ascii=False, indent=2)
