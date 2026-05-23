@@ -211,3 +211,19 @@ class TestGemmaIntent(unittest.TestCase):
         with patch.object(query_intent, "_call_gemma_intent", return_value="bogus"):
             r = query_intent.classify_with_gemma("뭐해")
         self.assertIsNone(r)
+
+    def test_call_gemma_intent_propagates_non_network_exceptions(self):
+        """Codex P2 fix: _call_gemma_intent 가 광범위 except Exception 안 쓰도록 좁혔다 —
+        hook 의 SIGALRM _Timeout 같은 외부 Exception 은 통과해야 함."""
+        import query_intent
+        from unittest.mock import patch
+
+        class _FakeHookTimeout(Exception):
+            pass
+
+        # urlopen 직전에 hook timeout 시뮬레이션. 좁은 except 만으로는 잡히지 않아야 한다.
+        with patch.object(
+            query_intent.urllib.request, "urlopen", side_effect=_FakeHookTimeout()
+        ):
+            with self.assertRaises(_FakeHookTimeout):
+                query_intent._call_gemma_intent("test")

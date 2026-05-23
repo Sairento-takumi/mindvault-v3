@@ -58,7 +58,10 @@ def _is_non_trivial_bash(cmd: str) -> bool:
         return True
     if cmd.count(" | ") >= 2:
         return True
-    if cmd.count(">") + cmd.count(">>") >= 2:
+    # Codex review fix: 기존 `cmd.count(">") + cmd.count(">>")` 는 `>>` 안의 `>` 가
+    # 두 번 카운트돼 `echo x >> file` 같은 trivial append 가 합 3 으로 잘못 잡혔다.
+    # findall 로 `>>` 또는 `>` 를 토큰 단위로 카운트 — 의도된 "2+ redirect 연산자" 정확.
+    if len(re.findall(r">>|>", cmd)) >= 2:
         return True
     return False
 

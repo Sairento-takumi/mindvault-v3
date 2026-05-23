@@ -127,7 +127,12 @@ def _stage_with_conflict_resolution(
     - session 안 동일 slug + body 다름 → `_2`, `_3` suffix 로 모두 살림
     writer(item, session_id, slug_override=...) -> Path | None 콜백.
     """
+    # Codex review fix: 같은 session 에 base='same' 와 base='same_2' 가 동시에
+    # 있으면 첫 'same' suffix 가 'same_2' 가 되어 자연 slug 'same_2' 와 collision.
+    # base 별 body 카운터 외에 final generated slug 도 글로벌 추적 — 충돌 시
+    # 다음 suffix 로 skip.
     session_slug_bodies: dict[str, list[str]] = {}
+    used_final_slugs: set[str] = set()
     written = 0
     for item in candidates:
         s_base = slugify(item["title"])
@@ -139,16 +144,25 @@ def _stage_with_conflict_resolution(
         if body and body in prev_bodies:
             _debug(f"dup body in session {s_base}, skip")
             continue
-        s_final = (
-            s_base if not prev_bodies else f"{s_base}_{len(prev_bodies) + 1}"
-        )
+        # base 자연 형태부터 시도, 충돌하면 _2, _3 ... 으로 증분
+        idx = len(prev_bodies)
+        while True:
+            candidate_slug = s_base if idx == 0 else f"{s_base}_{idx + 1}"
+            if (
+                candidate_slug not in used_final_slugs
+                and candidate_slug not in existing_slugs_set
+            ):
+                break
+            idx += 1
+        s_final = candidate_slug
         prev_bodies.append(body)
         if writer(item, session_id, slug_override=s_final):
             written += 1
+            used_final_slugs.add(s_final)
             # NOTE: existing_slugs_set 에 추가하지 않음 — session 안 추적은
-            # session_slug_bodies 가 담당. existing_slugs_set 는 "file system 의
-            # 기존 memory" 만 의미해야, 동일 session 안의 다음 candidate 가
-            # 잘못 "기존 충돌" 로 skip 되지 않는다.
+            # session_slug_bodies + used_final_slugs 가 담당. existing_slugs_set 는
+            # "file system 의 기존 memory" 만 의미해야, 동일 session 안의 다음
+            # candidate 가 잘못 "기존 충돌" 로 skip 되지 않는다.
     return written
 
 

@@ -187,6 +187,18 @@ class TestAutoTriggerHeuristic(unittest.TestCase):
         msgs = [{"role": "user", "text": "이 명령어 외워둬", "bash_commands": []}]
         self.assertTrue(has_trigger(msgs))
 
+    def test_append_redirect_not_non_trivial(self):
+        """Codex P3 fix: 'echo x >> file' 는 trivial. 기존 count(">") + count(">>") 산수 오류로 false positive 였음."""
+        from memory_extractor import _is_non_trivial_bash
+        self.assertFalse(_is_non_trivial_bash("echo x >> file"))
+        self.assertFalse(_is_non_trivial_bash("echo x > file"))
+
+    def test_true_two_redirects_still_non_trivial(self):
+        """진짜 2개 이상 redirect 연산자는 non_trivial."""
+        from memory_extractor import _is_non_trivial_bash
+        self.assertTrue(_is_non_trivial_bash("echo a > x && echo b > y"))
+        self.assertTrue(_is_non_trivial_bash("echo a >> x; echo b >> y"))
+
 
 class TestExtractBashFromContent(unittest.TestCase):
     def test_extracts_bash_command(self):
@@ -363,6 +375,39 @@ class TestSlugConflictResolution(unittest.TestCase):
             {"exists"}, "sid", writer,
         )
         self.assertEqual(n, 1)
+
+    def test_natural_slug_collision_with_suffix_avoided(self):
+        """Codex P2 fix: title='same' 와 title='same_2' 동시에 있어도 final slug collision 회피."""
+        from session_memory_end import _stage_with_conflict_resolution
+        writer, written = self._make_writer()
+        n = _stage_with_conflict_resolution(
+            [
+                {"title": "same", "body": "a", "type": "feedback"},
+                {"title": "same_2", "body": "b", "type": "feedback"},
+                {"title": "same", "body": "c", "type": "feedback"},
+            ],
+            set(), "sid", writer,
+        )
+        slugs = [s for _, s in written]
+        # 자연 'same_2' 가 그대로 살아남고, 두번째 'same' 은 collision 회피해 'same_3'
+        self.assertEqual(slugs, ["same", "same_2", "same_3"])
+        self.assertEqual(n, 3)
+
+    def test_natural_slug_collision_with_existing_file_skips_collision(self):
+        """기존 file system 의 'same_2' 와도 collision 회피 — base 매칭 안 되니 suffix 증가."""
+        from session_memory_end import _stage_with_conflict_resolution
+        writer, written = self._make_writer()
+        n = _stage_with_conflict_resolution(
+            [
+                {"title": "same", "body": "a", "type": "feedback"},
+                {"title": "same", "body": "b", "type": "feedback"},
+            ],
+            # 'same_2' 가 file system 에 이미 있음 — 두번째 'same' 은 'same_3' 가 돼야 함
+            {"same_2"}, "sid", writer,
+        )
+        slugs = [s for _, s in written]
+        self.assertEqual(slugs, ["same", "same_3"])
+        self.assertEqual(n, 2)
 
     def test_writer_failure_does_not_block_progression(self):
         from session_memory_end import _stage_with_conflict_resolution

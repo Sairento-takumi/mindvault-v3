@@ -23,6 +23,7 @@ import json
 import os
 import re
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import NamedTuple
@@ -188,6 +189,10 @@ def _call_gemma_intent(prompt_text: str) -> str | None:
         headers={"Content-Type": "application/json"},
         method="POST",
     )
+    # Codex review fix: 광범위 except Exception 은 hook 의 SIGALRM _Timeout 까지
+    # swallow → UserPromptSubmit hook 의 400ms budget 보장 깨짐. 네트워크·디코드
+    # 계열만 명시적으로 잡고 BaseException (KeyboardInterrupt 등) 과 hook 의
+    # _Timeout 은 통과시켜 hook outer try/except 가 잡게 한다.
     try:
         with urllib.request.urlopen(req, timeout=GEMMA_INTENT_TIMEOUT) as resp:
             data = json.loads(resp.read())
@@ -196,7 +201,13 @@ def _call_gemma_intent(prompt_text: str) -> str | None:
             return None
         content = (choices[0].get("message") or {}).get("content") or ""
         return content.strip() or None
-    except Exception as e:
+    except (
+        TimeoutError,
+        urllib.error.URLError,
+        json.JSONDecodeError,
+        OSError,
+        ValueError,
+    ) as e:
         _debug(f"gemma intent fail: {type(e).__name__} {e}")
         return None
 
