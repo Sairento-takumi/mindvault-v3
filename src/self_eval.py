@@ -605,7 +605,7 @@ def analyze_recent(
     metrics_path: Path = DEFAULT_METRICS,
     projects_root: Path = DEFAULT_PROJECTS_ROOT,
     hours_back: int = 168,
-    use_cache: bool = False,
+    use_cache: bool = True,
 ) -> dict:
     """최근 N 시간 recall 이벤트 분석 → metric dict.
 
@@ -847,13 +847,21 @@ def main() -> int:
     )
     parser.add_argument(
         "--use-cache",
+        dest="use_cache",
         action="store_true",
-        help="Sprint NEXT-7 turns_cache 경유 (mtime 기반 incremental). 50s → <5s",
+        default=True,
+        help="Sprint NEXT-7 turns_cache 경유 (mtime 기반 incremental). default ON",
+    )
+    parser.add_argument(
+        "--no-cache",
+        dest="use_cache",
+        action="store_false",
+        help="turns_cache 우회, 직접 jsonl parsing (rollback 경로)",
     )
     parser.add_argument(
         "--rebuild-cache",
         action="store_true",
-        help="turns_cache 전체 재빌드 (mtime 무시). --use-cache 와 함께",
+        help="turns_cache 전체 재빌드 (mtime 무시)",
     )
     args = parser.parse_args()
     if args.rebuild_cache:
