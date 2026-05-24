@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 import traceback
@@ -48,6 +49,38 @@ NEXT_ACTION_RE = re.compile(
     r"(진행|해결|적용|켜줘|실행|영구화|반영|배포|sync|push|land|merge|commit|"
     r"ship|다음|이어서|계속)"
 )
+
+# Sprint NEXT-10 — ACK 휴리스틱. NEXT-1 (다음 액션 지시) 과 보완 관계:
+# NEXT-1 은 "진행/적용/켜줘" 같은 NEXT_ACTION 시그널을 잡고, NEXT-10 은
+# "좋아/OK/ㅇㅇ/굿" 같은 단순 confirmation 을 잡는다. 형의 한국어 응답 패턴상
+# 한 줄 ACK 가 가장 흔한 결정 confirmation 시그널 — backfill 24/1 hit ratio
+# (NEXT-8 BUILD-LOG §5) 가 노출한 extractor recall 한계의 1차 해소책.
+#
+# 안전선:
+# 1) 직전 assistant 가 의미있는 변경 시그널 (Bash tool_use 있음 OR text ≥ 200자)
+# 2) user turn 짧음 (≤ 30자) — 잡담 긴 답변 차단
+# 3) MV2_EXTRACTOR_ACK_TRIGGER=0 으로 끌 수 있음 (false positive 측정 후 튜닝)
+ACK_RE = re.compile(
+    r"^(좋[아네아으]|굳|굿|good|nice|perfect|훌륭|ㅇㅇ|ㅇㅋ|어|네|예|"
+    r"OK|ok|오케이|콜|땡큐|thx|thanks|감사|👍|✓|✔|💯|확인|"
+    r"맞[아네어]|그래|그러게|그렇네|좋아요|좋다|완벽|아주\s?좋)"
+    r"[\.!~ㅋㅎ\s]{0,15}$",
+    re.IGNORECASE,
+)
+SIGNIFICANT_ASSISTANT_TEXT_LEN = 200
+ACK_TRIGGER_ENABLED = os.environ.get("MV2_EXTRACTOR_ACK_TRIGGER", "1") == "1"
+
+
+def _is_significant_assistant(m: dict) -> bool:
+    """assistant turn 이 변경/결정 시그널을 가지는지.
+
+    bash_commands 가 있거나 텍스트가 길면 (≥ SIGNIFICANT_ASSISTANT_TEXT_LEN)
+    significant. NEXT-10 ACK 휴리스틱의 1차 게이트.
+    """
+    if m.get("bash_commands"):
+        return True
+    text = m.get("text", "") or ""
+    return len(text) >= SIGNIFICANT_ASSISTANT_TEXT_LEN
 
 
 def _is_non_trivial_bash(cmd: str) -> bool:
@@ -171,13 +204,18 @@ def load_tail_messages(jsonl_path: Path, tail_turns: int = 40) -> list[dict]:
 
 
 def has_trigger(messages: list[dict]) -> bool:
-    """기존 키워드 trigger OR Sprint NEXT-1 자동 휴리스틱.
+    """3 layer trigger 결합:
 
-    휴리스틱: 직전 assistant 의 Bash tool_use 가 special_binary 또는
-    non_trivial 인데, 직후 user 가 NEXT_ACTION 표현으로 응답하면
-    procedural 후보 가치가 있다고 본다 (Gemma 가 최종 판별).
+    1. TRIGGER_RE — 명시 키워드 (기억해/결정:/외워둬/이 명령어 …). 항상 ON.
+    2. NEXT-1 휴리스틱 — special/non_trivial bash + 직후 user NEXT_ACTION. 항상 ON.
+    3. NEXT-10 ACK 휴리스틱 — significant assistant + 직후 user 짧은 ACK.
+       MV2_EXTRACTOR_ACK_TRIGGER=0 으로 OFF 가능.
+
+    Gemma 가 최종 판별. trigger 는 "이 세션에 procedural/decision 후보가 있을 가능성"
+    1차 필터. 분기된 trigger 사유는 _debug 로 가시화 (self_eval 측정 인프라).
     """
     prev_bash_signal = False
+    prev_significant = False
     for m in messages:
         role = m.get("role")
         text = m.get("text", "") or ""
@@ -187,19 +225,32 @@ def has_trigger(messages: list[dict]) -> bool:
             # special/non_trivial 가 보였으면 signal 누적
             if any(_is_special_bash(c) or _is_non_trivial_bash(c) for c in cmds):
                 prev_bash_signal = True
+            if _is_significant_assistant(m):
+                prev_significant = True
             continue
         if role != "user":
             continue
         if TRIGGER_RE.search(text):
+            _debug("trigger=keyword")
             return True
         if (
             prev_bash_signal
             and len(text) <= 50
             and NEXT_ACTION_RE.search(text)
         ):
+            _debug("trigger=next1-action")
+            return True
+        if (
+            ACK_TRIGGER_ENABLED
+            and prev_significant
+            and len(text.strip()) <= 30
+            and ACK_RE.search(text.strip())
+        ):
+            _debug(f"trigger=next10-ack text={text.strip()[:20]!r}")
             return True
         # user turn 마침 → 다음 사이클 위해 reset
         prev_bash_signal = False
+        prev_significant = False
     return False
 
 
