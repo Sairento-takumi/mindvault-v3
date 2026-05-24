@@ -35,6 +35,13 @@ RECURSION_GUARD_ENV = "MV2_HOOK_RECURSION_GUARD"
 if os.environ.get(RECURSION_GUARD_ENV) == "1":
     sys.exit(0)
 
+# NEXT-19 final fix (2026-05-24): Claude Code hook subprocess 가 본체 env 안 inherit —
+# launchctl plist / .zshrc / .zshenv / wrapper export 모두 fail.
+# wrapper 의 setsid 는 macOS 미지원, settings.json 직접 호출 path 는 wrapper 우회.
+# 영구화는 코드 안에 setdefault — 외부 명시 override 가능 (테스트), default 는 항상 ON.
+os.environ.setdefault("MV2_AUTO_COMPILE", "1")
+os.environ.setdefault("MV2_EXTRACTOR_ALWAYS_FIRE", "1")
+
 from memory_extractor import extract_from_jsonl  # type: ignore  # noqa: E402
 
 PROJECTS_ROOT = Path("/Users/yonghaekim/.claude/projects")
