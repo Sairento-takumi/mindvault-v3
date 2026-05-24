@@ -25,6 +25,10 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 DEBUG_LOG = Path("/Users/yonghaekim/.claude/mindvault-v2/debug.log")
+STAGED_DIRS = (
+    Path("/Users/yonghaekim/.claude/projects/-Users-yonghaekim-my-folder/memory/_staged"),
+    Path("/Users/yonghaekim/.claude/projects/-Users-yonghaekim-my-folder/memory/_procedural/_staged"),
+)
 PROD = Path("/Users/yonghaekim/.claude/scripts/mindvault")
 if str(PROD) not in sys.path:
     sys.path.insert(0, str(PROD))
@@ -164,6 +168,22 @@ def cache_stats_or_empty() -> dict:
         return {"error": str(e)}
 
 
+def staged_type_distribution() -> dict:
+    """NEXT-11 측정 — staged 후보 type 분포 (frontmatter `type:` 읽기)."""
+    counts: Counter = Counter()
+    for d in STAGED_DIRS:
+        if not d.is_dir():
+            continue
+        for p in d.glob("*.md"):
+            try:
+                text = p.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            m = re.search(r"^type:\s*(\w+)\s*$", text, re.MULTILINE)
+            counts[m.group(1) if m else "unknown"] += 1
+    return dict(counts)
+
+
 def fmt_human(d: dict, hours: float | None) -> str:
     lines = []
     span = f"최근 {hours}h" if hours else "전체"
@@ -216,6 +236,12 @@ def fmt_human(d: dict, hours: float | None) -> str:
         f"total_candidates: {cs.get('total_candidates', 0)}"
     )
 
+    st = d.get("staged_types", {})
+    if st:
+        lines.append("staged type 분포 (NEXT-11):")
+        for t, n in sorted(st.items(), key=lambda x: -x[1]):
+            lines.append(f"  - {t:<12} {n}")
+
     return "\n".join(lines)
 
 
@@ -242,6 +268,7 @@ def main(argv: list[str] | None = None) -> int:
     hours = None if args.all else args.last_hours
     d = parse_debug(hours)
     d["cache"] = cache_stats_or_empty()
+    d["staged_types"] = staged_type_distribution()
 
     if args.json:
         print(json.dumps(d, ensure_ascii=False, indent=2))

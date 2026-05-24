@@ -296,15 +296,22 @@ def build_prompt(messages: list[dict]) -> str:
     excerpt = "\n".join(excerpt_parts)
     return (
         "아래는 Claude Code 세션 대화 마지막 부분이다. 사용자가 '영구 기억'으로 남기려고 한 "
-        "사실만 추출하라. 주관적 의견·일회성 대화·진행 보고는 제외.\n\n"
+        "사실만 추출하라. 단순 진행 보고나 일회성 대화는 제외, 단 sprint 진척·결정·"
+        "마일스톤 같은 누적 메타데이터는 project 로 적극 추출.\n\n"
         "출력은 JSON 배열만. 각 항목 형식:\n"
         '{"type":"feedback|project|procedural","title":"한 줄 50자 이내","body":"본문 200자 이내",'
         '"reason":"저장 이유 10자 이내","evidence":"원문 인용 30자"}\n\n'
         "type 가이드:\n"
-        "- feedback: 사용자의 작업 방식·선호·금지사항 (예: '커밋 분리해라', '머지 직접 금지')\n"
-        "- project: 프로젝트 상태·결정·인물·외부 자원 (예: 'X 출시 2026-05', '책임자 Y')\n"
+        "- feedback: 사용자의 작업 방식·선호·금지사항 (예: '커밋 분리해라', '머지 직접 금지', "
+        "  '자의적 멈춤 권고 금지').\n"
+        "- project: 프로젝트의 누적 상태·결정·진척·인물·외부 자원·milestone.\n"
+        "  예: 'X v3.0 ship 2026-05', 'master HEAD abc123 NEXT-N fix 완료', "
+        "  'Sprint 14 Memory Compiler 운영 fire 시작', '책임자 Y'.\n"
+        "  NEXT-11: 진척 메타데이터도 적극 — 한 sprint 결과·운영 측정 수치·게이트 통과 등은\n"
+        "  영구 기록 가치. 같은 주제 기존 메모리 있으면 update 자동 매칭됨 (NEXT-2).\n"
         "- procedural: 명령어·syntax·workflow·환경 설정. body 는 실행 예시 1줄 + 한 줄 설명.\n"
-        "  예: body='claude --bg \"prompt\" # 백그라운드 세션 시작. 결과는 jobs 디렉토리에 저장.'\n\n"
+        "  예: body='claude --bg \"prompt\" # 백그라운드 세션 시작. 결과는 jobs 디렉토리에 저장.'\n"
+        "  단순 실행 보고 (예: 'commit 완료', 'test 통과') 자체는 procedural 아님.\n\n"
         "후보가 없으면 빈 배열 []. 해설·마크다운 코드펜스 금지. JSON만.\n\n"
         "---대화---\n"
         f"{excerpt}\n"
