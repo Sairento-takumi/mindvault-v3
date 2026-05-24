@@ -10,14 +10,14 @@
 set -u
 
 # sub-session의 SessionEnd hook 즉시 skip
-if [ "${MV2_HOOK_RECURSION_GUARD:-}" = "1" ]; then
+if [ "${MV3_HOOK_RECURSION_GUARD:-}" = "1" ]; then
   exit 0
 fi
 
 # NEXT-19 hook subprocess env 강제 (위 주석 참조)
-export MV2_AUTO_COMPILE=1
-export MV2_EXTRACTOR_ALWAYS_FIRE=1
-export MV2_GEMMA_INTENT=1
+export MV3_AUTO_COMPILE=1
+export MV3_EXTRACTOR_ALWAYS_FIRE=1
+export MV3_GEMMA_INTENT=1
 
 TMP_DIR="${TMPDIR:-/tmp}"
 TMP_STDIN=$(mktemp "${TMP_DIR}/mindvault-end-stdin.XXXXXX") || exit 0

@@ -36,7 +36,7 @@ from memory_indexer import (  # noqa: E402
     parse_frontmatter,
 )
 
-DATA_DIR = Path("/Users/yonghaekim/.claude/mindvault-v2")
+DATA_DIR = Path("/Users/yonghaekim/.claude/mindvault-v3")
 DEBUG_LOG = DATA_DIR / "debug.log"
 
 

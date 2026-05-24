@@ -93,8 +93,8 @@ fi
 
 # Sprint 4: memories_* 테이블 옵션 제거 (--purge-vec 플래그)
 if [ "${1:-}" = "--purge-vec" ]; then
-  if [ -f "$HOME/.claude/mindvault-v2/index.db" ]; then
-    sqlite3 "$HOME/.claude/mindvault-v2/index.db" \
+  if [ -f "$HOME/.claude/mindvault-v3/index.db" ]; then
+    sqlite3 "$HOME/.claude/mindvault-v3/index.db" \
       "DROP TABLE IF EXISTS memories_vec; DROP TABLE IF EXISTS memories_fts; DROP TABLE IF EXISTS memories;" 2>/dev/null \
       && echo "✓ dropped memories_* tables (--purge-vec)"
   fi
@@ -102,5 +102,5 @@ fi
 
 echo ""
 echo "Uninstall complete."
-echo "Cache + index preserved at $HOME/.claude/mindvault-v2/. Delete manually if desired."
+echo "Cache + index preserved at $HOME/.claude/mindvault-v3/. Delete manually if desired."
 echo "BGE-M3 model preserved at $HOME/.cache/mlx-bge-m3/ (~322MB). Delete manually if desired."

@@ -118,25 +118,25 @@ class TestGemmaIntent(unittest.TestCase):
     def test_gemma_intent_env_off_default(self):
         from query_intent import gemma_intent_enabled
         import os
-        os.environ.pop("MV2_GEMMA_INTENT", None)
+        os.environ.pop("MV3_GEMMA_INTENT", None)
         self.assertFalse(gemma_intent_enabled())
 
     def test_gemma_intent_env_on(self):
         from query_intent import gemma_intent_enabled
         import os
-        os.environ["MV2_GEMMA_INTENT"] = "1"
+        os.environ["MV3_GEMMA_INTENT"] = "1"
         try:
             self.assertTrue(gemma_intent_enabled())
         finally:
-            os.environ.pop("MV2_GEMMA_INTENT", None)
+            os.environ.pop("MV3_GEMMA_INTENT", None)
 
     def test_gemma_intent_env_other_values_off(self):
         from query_intent import gemma_intent_enabled
         import os
         for v in ("0", "true", "yes", ""):
-            os.environ["MV2_GEMMA_INTENT"] = v
+            os.environ["MV3_GEMMA_INTENT"] = v
             self.assertFalse(gemma_intent_enabled(), f"value={v!r} should be off")
-        os.environ.pop("MV2_GEMMA_INTENT", None)
+        os.environ.pop("MV3_GEMMA_INTENT", None)
 
     def test_normalize_gemma_label_valid(self):
         from query_intent import _normalize_gemma_label

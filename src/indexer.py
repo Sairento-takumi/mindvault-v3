@@ -28,7 +28,7 @@ def iter_jsonl_paths(root: Path = PROJECTS_ROOT):
         return
     for p in root.glob("*/*.jsonl"):
         yield p
-DATA_DIR = Path("/Users/yonghaekim/.claude/mindvault-v2")
+DATA_DIR = Path("/Users/yonghaekim/.claude/mindvault-v3")
 DB_PATH = DATA_DIR / "index.db"
 DEBUG_LOG = DATA_DIR / "debug.log"
 SIGNATURE = "# 지난 세션 요약 (MindVault v2)"

@@ -1,6 +1,6 @@
 ---
 name: handoff-sprint-next-8-projects-root-fix-build-log
-description: V3-NEXT-IMPROVEMENTS #8 — session_memory_end.PROJECTS_DIR 단일 슬롯 하드코딩 fix. Sprint 6 multi-projects 패치가 indexer만 받고 SessionEnd hook 누락 → mindvault-v2 cwd 세션 jsonl missing → Memory Compiler 운영 fire 0건. 진단 4단계 + 한 줄 fix + backfill 24건 + 첫 fire 결과 + NEXT-9 schema test cleanup.
+description: V3-NEXT-IMPROVEMENTS #8 — session_memory_end.PROJECTS_DIR 단일 슬롯 하드코딩 fix. Sprint 6 multi-projects 패치가 indexer만 받고 SessionEnd hook 누락 → mindvault-v3 cwd 세션 jsonl missing → Memory Compiler 운영 fire 0건. 진단 4단계 + 한 줄 fix + backfill 24건 + 첫 fire 결과 + NEXT-9 schema test cleanup.
 ---
 
 # MindVault v3 → 차기 보강 #8 — PROJECTS_ROOT 전체 슬롯 glob 빌드 로그
@@ -18,7 +18,7 @@ description: V3-NEXT-IMPROVEMENTS #8 — session_memory_end.PROJECTS_DIR 단일 
 
 | # | 가설 | 결과 |
 |---|---|---|
-| 1 | `auto_compile_enabled()` False 리턴? | ❌. `launchctl getenv MV2_AUTO_COMPILE = 1` (`com.yonghaekim.mv2-env.plist` 영구화 효과) |
+| 1 | `auto_compile_enabled()` False 리턴? | ❌. `launchctl getenv MV3_AUTO_COMPILE = 1` (`com.yonghaekim.mv3-env.plist` 영구화 효과) |
 | 2 | SessionEnd hook 자체가 안 떠? | ❌. debug.log 에 5/23 22:40 ~ 5/24 09:54 사이 9건 fire 확인 |
 | 3 | candidates 비어서 compile 분기 미진입? | ⚠️ 부분. 정확히는 **한 단계 전**, `extract_from_jsonl` 호출 자체 안 됨 |
 | 4 | jsonl 탐색 경로 문제? | ✓ 확정. `PROJECTS_DIR / {sid}.jsonl` 가 단일 슬롯 — 다른 cwd 세션 100% miss |
@@ -28,13 +28,13 @@ description: V3-NEXT-IMPROVEMENTS #8 — session_memory_end.PROJECTS_DIR 단일 
 - `session_memory_end.py:40` 가 `PROJECTS_DIR = Path("...projects/-Users-yonghaekim-my-folder")` 단일 슬롯 하드코딩.
 - `indexer.py:16` 는 Sprint 6 fix 로 `PROJECTS_ROOT = Path("...projects")` + `iter_jsonl_paths(root)` 전체 흡수.
 - **즉, indexer/회수 layer 만 multi-projects 적응, 자동 추출 layer 는 패치 누락.**
-- sid `949a8635` 실제 위치: `-Users-yonghaekim-my-folder-apps-mindvault-v2/949a8635-*.jsonl` (mindvault-v2 cwd 세션).
+- sid `949a8635` 실제 위치: `-Users-yonghaekim-my-folder-apps-mindvault-v3/949a8635-*.jsonl` (mindvault-v3 cwd 세션).
 - hook 탐색 위치: `-Users-yonghaekim-my-folder/949a8635-*.jsonl` → 없음 → `jsonl missing for 949a8635` → line 186 early return.
 - `extract_from_jsonl` 호출 안 됨 → candidates 0건 → `compile_candidates` 분기 진입 안 됨 → Memory Compiler 운영 fire 0건 → `_staged/`, `_procedural/` 디렉토리 자체 존재 안 함.
 
 ### dogfooding gap 의 정확한 좌표
 
-형이 mindvault-v2 cwd 또는 그 worktree (`-Users-yonghaekim-my-folder-apps-mindvault-v2--claude-worktrees-v3-sprint-13-16`) 에서 v3 개발 → 그 cwd 의 모든 세션 jsonl 이 별도 슬롯에 쌓임 → 본인이 만든 자동화가 본인 개발 환경만 골라서 못 봄. 5/22~24 v3 핵심 sprint 진척이 메모리에 0건 캡처된 직접 원인.
+형이 mindvault-v3 cwd 또는 그 worktree (`-Users-yonghaekim-my-folder-apps-mindvault-v3--claude-worktrees-v3-sprint-13-16`) 에서 v3 개발 → 그 cwd 의 모든 세션 jsonl 이 별도 슬롯에 쌓임 → 본인이 만든 자동화가 본인 개발 환경만 골라서 못 봄. 5/22~24 v3 핵심 sprint 진척이 메모리에 0건 캡처된 직접 원인.
 
 홈 cwd (`-Users-yonghaekim`) 세션은 정상 처리돼 sendmail/EPSON/grammar 등 일반 메모리는 갱신됨 — 사각지대가 v3 본인 메타정보에 정확히 집중된 아이러니.
 
@@ -81,7 +81,7 @@ master commit: `eaa5434 fix(session-end): PROJECTS_ROOT 전체 슬롯 glob — S
 
 ### sanity check
 ```
-sid prefix 949a8635 → -Users-yonghaekim-my-folder-apps-mindvault-v2 ✓
+sid prefix 949a8635 → -Users-yonghaekim-my-folder-apps-mindvault-v3 ✓
 sid prefix fae488da → -Users-yonghaekim ✓
 sid prefix 03269e96 → NONE (jsonl 사라짐, 의도된 동작)
 ```
@@ -108,7 +108,7 @@ sid prefix 03269e96 → NONE (jsonl 사라짐, 의도된 동작)
 ### 호출 결과
 - debug.log `jsonl missing for` 패턴 unique 31건 prefix 추출.
 - `PROJECTS_ROOT.glob` 매칭 → resolved 24건, unresolved 7건 (jsonl 진짜 사라짐 — Claude Code 가 빈 세션 정리한 케이스).
-- 24건 직렬 hook 호출 (`MV2_AUTO_COMPILE=1`, sleep 0.7s sqlite WAL 충돌 회피).
+- 24건 직렬 hook 호출 (`MV3_AUTO_COMPILE=1`, sleep 0.7s sqlite WAL 충돌 회피).
 - 모두 exit 0.
 
 ### staged 결과 (의외)
@@ -150,7 +150,7 @@ master commit: `524e442 test(schema): expected v2 → 현재 SCHEMA_VERSION (v3)
 ### NEXT-10 (가장 시급) — extractor recall 폭 확장
 - 현 trigger 2 layer (TRIGGER_RE + NEXT-1 휴리스틱) 만으로는 일반 세션의 결정·learnings 추출률 낮음 — backfill 24/24 중 1건만 fire 가 증거.
 - 후보: (a) 3rd layer — assistant tool_use 결과 + 다음 user 짧은 ack ("좋아", "OK", "ㅇㅇ") 결합. (b) Gemma fulltext scan — 세션 전체를 Gemma 에게 "이 세션에 영구 기억할 만한 결정/사실 있나" 1회 prompt.
-- 위험: false positive 폭증 + Gemma 호출 비용. opt-in env (`MV2_EXTRACTOR_DEEP_SCAN=1`) 로 시작.
+- 위험: false positive 폭증 + Gemma 호출 비용. opt-in env (`MV3_EXTRACTOR_DEEP_SCAN=1`) 로 시작.
 
 ### NEXT-11 — project narrative 메모리 자동화
 - v3 가설은 procedural slot 우선 — `project_mindvault.md` 같은 narrative 진척은 여전히 `/close-session` 명시 호출 의존.
@@ -163,7 +163,7 @@ master commit: `524e442 test(schema): expected v2 → 현재 SCHEMA_VERSION (v3)
 - 측정: 동일 jsonl 두 번 호출 → diff 분석. 결과에 따라 (1) extractor 가 마지막 N turn 만 본다 → window 조정 (2) trigger 위치 (assistant vs user turn) 영향 → 가중치 조정.
 
 ### NEXT-13 — backfill CLI 표준화
-- 본 sprint 의 `/tmp/mv2-missing-prefixes.txt` + backfill.py 가 ad-hoc.
+- 본 sprint 의 `/tmp/mv3-missing-prefixes.txt` + backfill.py 가 ad-hoc.
 - `recall_cli.py` 옆에 `backfill_cli.py` 추가 — `--missing-only` (debug.log 스캔), `--last-hours N` (시간 범위), `--dry-run` (호출 안 함, target 만 표시).
 
 ## 8. master HEAD
@@ -177,12 +177,12 @@ b440d9e fix(query_intent): Gemma thinking 모드로 빈 응답 회귀 — enable
 ### production sync
 - `~/.claude/hooks/session-memory-end.py` 백업: `bak-20260524-101759`
 - production version = master `eaa5434` 동기화 완료
-- launchctl 서비스 (`com.yonghaekim.arctic-ko-mlx`, `com.yonghaekim.gemma-mlx`, `com.yonghaekim.mv2-env`, `com.yonghaekim.mv2-gemma-intent`) 모두 손대지 않음. SessionEnd hook 만 갱신.
+- launchctl 서비스 (`com.yonghaekim.arctic-ko-mlx`, `com.yonghaekim.gemma-mlx`, `com.yonghaekim.mv3-env`, `com.yonghaekim.mv3-gemma-intent`) 모두 손대지 않음. SessionEnd hook 만 갱신.
 
 ### 인덱스 영향
 - DB 스키마 변경 없음. `indexer.full_rebuild` 호출 안 함 (안전 원칙 준수).
 - `_procedural/_staged/` 2건 신규 — `/memory_review` 로 형 검토 대기.
-- 다음 SessionEnd 부터 자동으로 mindvault-v2 cwd 세션도 추출 대상.
+- 다음 SessionEnd 부터 자동으로 mindvault-v3 cwd 세션도 추출 대상.
 
 ## 9. 관련
 

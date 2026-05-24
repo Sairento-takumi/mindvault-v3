@@ -5,7 +5,7 @@
 판단해, 동일 주제 메모리가 이미 있으면 Gemma 로 정제·통합한 update 후보로 변환한다.
 Karpathy LLM-as-compiler 패턴의 핵심 구현체.
 
-opt-in: session_memory_end 가 환경변수 `MV2_AUTO_COMPILE=1` 일 때만 호출.
+opt-in: session_memory_end 가 환경변수 `MV3_AUTO_COMPILE=1` 일 때만 호출.
 실패는 silent — 정제 실패 시 원본 candidate 그대로 통과해 기존 v2.9.2 흐름 유지.
 
 매칭 규칙:
@@ -39,14 +39,14 @@ from memory_indexer import (  # noqa: E402
     parse_frontmatter,
 )
 
-DATA_DIR = Path("/Users/yonghaekim/.claude/mindvault-v2")
+DATA_DIR = Path("/Users/yonghaekim/.claude/mindvault-v3")
 DEBUG_LOG = DATA_DIR / "debug.log"
 GEMMA_URL = "http://localhost:8080/v1/chat/completions"
 GEMMA_MODEL = "mlx-community/gemma-4-e4b-it-4bit"
 GEMMA_TIMEOUT = 45
 COMPILE_BODY_LIMIT = 500  # update 결과 본문 최대 글자 수 (soft hint to Gemma)
 COMPILE_BODY_HARD_LIMIT = 1200  # 실제 trim 한계
-ENABLE_AUTO_COMPILE_ENV = "MV2_AUTO_COMPILE"
+ENABLE_AUTO_COMPILE_ENV = "MV3_AUTO_COMPILE"
 # Sprint NEXT-2 — embedding fallback. name exact·slug 매칭이 모두 실패했을 때
 # candidate body 임베딩과 memories_vec cosine top-1 이 이 임계값 이상이면
 # 같은 주제로 본다. 0.75 는 memory_search 의 raw_cosine 게이트(0.40/0.32) 보다

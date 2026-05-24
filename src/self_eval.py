@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
-DATA_DIR = Path("/Users/yonghaekim/.claude/mindvault-v2")
+DATA_DIR = Path("/Users/yonghaekim/.claude/mindvault-v3")
 DEFAULT_METRICS = DATA_DIR / "metrics.jsonl"
 DEFAULT_PROJECTS_ROOT = Path("/Users/yonghaekim/.claude/projects")
 DEBUG_LOG = DATA_DIR / "debug.log"

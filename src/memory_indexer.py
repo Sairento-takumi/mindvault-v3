@@ -29,7 +29,7 @@ from pathlib import Path
 import numpy as np
 import yaml
 
-DATA_DIR = Path("/Users/yonghaekim/.claude/mindvault-v2")
+DATA_DIR = Path("/Users/yonghaekim/.claude/mindvault-v3")
 DB_PATH = DATA_DIR / "index.db"
 DEBUG_LOG = DATA_DIR / "debug.log"
 LOCK_PATH = DATA_DIR / "memory-indexer.lock"
@@ -42,15 +42,15 @@ DEFAULT_MEMORY_DIRS = [
     Path("/Users/yonghaekim/.claude/projects/-Users-yonghaekim/memory"),
     Path("/Users/yonghaekim/.claude/projects/-Users-yonghaekim-my-folder/memory"),
 ]
-# Sprint 11: env var `MV2_EXTRA_MEMORY_DIRS=path1:path2` 로 추가 indexing 디렉토리.
+# Sprint 11: env var `MV3_EXTRA_MEMORY_DIRS=path1:path2` 로 추가 indexing 디렉토리.
 # 예: handoff/ 폴더에 sprint 별 brief/build-log 두는 환경에서 그 콘텐츠를 회수
 # 가능하게. hook의 _spawn_reindex가 부모 env 보존하므로 shell rc에 export 1회면
 # indexer + hook 양쪽에 자동 적용.
-ENV_EXTRA_DIRS = "MV2_EXTRA_MEMORY_DIRS"
+ENV_EXTRA_DIRS = "MV3_EXTRA_MEMORY_DIRS"
 
 
 SOURCES_CONFIG = DATA_DIR / "sources.json"
-# Sprint 16: env var(MV2_EXTRA_MEMORY_DIRS) + config file(sources.json) union.
+# Sprint 16: env var(MV3_EXTRA_MEMORY_DIRS) + config file(sources.json) union.
 # env 는 shell session 한정, config 는 영구. sources_cli.py 로 add/remove/list.
 
 

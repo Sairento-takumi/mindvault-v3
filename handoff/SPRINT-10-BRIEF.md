@@ -52,9 +52,9 @@ Sprint 9 swap 중 인덱스 풀 리빌드가 lock 충돌로 30분 가까이 hang
 
 ## 진행 환경
 
-- 작업 디렉토리: `/Users/yonghaekim/my-folder/apps/mindvault-v2`
+- 작업 디렉토리: `/Users/yonghaekim/my-folder/apps/mindvault-v3`
 - 현재 운영 임베딩: Arctic-ko MLX 4bit, port 8081, launchctl `com.yonghaekim.arctic-ko-mlx`
-- DB: `~/.claude/mindvault-v2/index.db` (WAL 모드 활성, synchronous=NORMAL)
+- DB: `~/.claude/mindvault-v3/index.db` (WAL 모드 활성, synchronous=NORMAL)
 - 현재 인덱스: memories 106, sessions 173, sessions_vec 166 (7개 vec 누락은 빈 head 추정 — 영향 없음)
 - 한국어 응답, 토큰 절약 룰 적용 (CLAUDE.md 참조)
 - Three Man Team 사용 가능: Arch / Bob / Richard

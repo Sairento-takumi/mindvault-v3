@@ -30,7 +30,7 @@ else:
     if _PROD.is_dir() and str(_PROD) not in sys.path:
         sys.path.insert(0, str(_PROD))
 
-RECURSION_GUARD_ENV = "MV2_HOOK_RECURSION_GUARD"
+RECURSION_GUARD_ENV = "MV3_HOOK_RECURSION_GUARD"
 # sub-session의 SessionEnd 즉시 skip
 if os.environ.get(RECURSION_GUARD_ENV) == "1":
     sys.exit(0)
@@ -39,8 +39,8 @@ if os.environ.get(RECURSION_GUARD_ENV) == "1":
 # launchctl plist / .zshrc / .zshenv / wrapper export 모두 fail.
 # wrapper 의 setsid 는 macOS 미지원, settings.json 직접 호출 path 는 wrapper 우회.
 # 영구화는 코드 안에 setdefault — 외부 명시 override 가능 (테스트), default 는 항상 ON.
-os.environ.setdefault("MV2_AUTO_COMPILE", "1")
-os.environ.setdefault("MV2_EXTRACTOR_ALWAYS_FIRE", "1")
+os.environ.setdefault("MV3_AUTO_COMPILE", "1")
+os.environ.setdefault("MV3_EXTRACTOR_ALWAYS_FIRE", "1")
 
 from memory_extractor import extract_from_jsonl  # type: ignore  # noqa: E402
 
@@ -55,7 +55,7 @@ STAGED_DIR = MEMORY_DIR / "_staged"
 # 양쪽 staged 모두 스캔.
 PROCEDURAL_DIR = MEMORY_DIR / "_procedural"
 PROCEDURAL_STAGED_DIR = PROCEDURAL_DIR / "_staged"
-DEBUG_LOG = Path("/Users/yonghaekim/.claude/mindvault-v2/debug.log")
+DEBUG_LOG = Path("/Users/yonghaekim/.claude/mindvault-v3/debug.log")
 
 
 def staged_dir_for(memory_type: str) -> Path:
@@ -204,7 +204,7 @@ def main() -> int:
             return 0
 
         # Sprint 14: opt-in auto compile — 기존 memory 와 매칭되는 후보는
-        # Gemma 가 정제해 update_of 메타 부착. env MV2_AUTO_COMPILE=1 일 때만.
+        # Gemma 가 정제해 update_of 메타 부착. env MV3_AUTO_COMPILE=1 일 때만.
         # 정제 실패는 silent — 원본 candidate 그대로 staged 처리.
         try:
             from memory_compiler import auto_compile_enabled, compile_candidates

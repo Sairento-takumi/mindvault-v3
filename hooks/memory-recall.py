@@ -13,7 +13,7 @@ import sys
 import time
 from pathlib import Path
 
-DATA_DIR = Path("/Users/yonghaekim/.claude/mindvault-v2")
+DATA_DIR = Path("/Users/yonghaekim/.claude/mindvault-v3")
 DEBUG_LOG = DATA_DIR / "debug.log"
 METRICS_LOG = DATA_DIR / "metrics.jsonl"
 MIN_PROMPT_LEN = 4  # 너무 짧은 키워드는 skip. 잡담은 raw cosine 게이트가 차단.
@@ -29,12 +29,12 @@ MEMORY_DIRS = [
     Path("/Users/yonghaekim/.claude/projects/-Users-yonghaekim/memory"),
     Path("/Users/yonghaekim/.claude/projects/-Users-yonghaekim-my-folder/memory"),
 ]
-# Sprint 11: env var `MV2_EXTRA_MEMORY_DIRS=path1:path2` — _mtime_changed가 이
+# Sprint 11: env var `MV3_EXTRA_MEMORY_DIRS=path1:path2` — _mtime_changed가 이
 # 디렉토리들도 watch해야 indexer trigger 일관. _spawn_reindex가 부모 env 보존하므로
 # indexer 본체는 자체적으로 같은 env 읽어 처리.
 import os as _os_envread
 _seen_dirs = {str(d) for d in MEMORY_DIRS}
-_extra = _os_envread.environ.get("MV2_EXTRA_MEMORY_DIRS", "").strip()
+_extra = _os_envread.environ.get("MV3_EXTRA_MEMORY_DIRS", "").strip()
 if _extra:
     for _piece in _extra.split(":"):
         _piece = _piece.strip()
@@ -117,15 +117,15 @@ def _spawn_reindex() -> None:
         scripts_path = ":".join(str(d) for d in SCRIPTS_DIRS if d.is_dir())
         code = (
             "import sys, os;"
-            f"sys.path[:0] = os.environ.get('MV2_SCRIPTS_PATH','').split(':');"
+            f"sys.path[:0] = os.environ.get('MV3_SCRIPTS_PATH','').split(':');"
             "from memory_indexer import incremental_index;"
             "incremental_index()"
         )
-        env = {"MV2_SCRIPTS_PATH": scripts_path, "PATH": ""}
+        env = {"MV3_SCRIPTS_PATH": scripts_path, "PATH": ""}
         # 부모 환경 변수 보존
         import os
         env.update({k: v for k, v in os.environ.items() if k not in env})
-        env["MV2_SCRIPTS_PATH"] = scripts_path
+        env["MV3_SCRIPTS_PATH"] = scripts_path
         subprocess.Popen(
             [sys.executable, "-c", code],
             stdout=subprocess.DEVNULL,
@@ -160,7 +160,7 @@ def _format_output(results: list[dict]) -> str:
     return "\n".join(lines) + "\n"
 
 
-RECURSION_GUARD_ENV = "MV2_HOOK_RECURSION_GUARD"
+RECURSION_GUARD_ENV = "MV3_HOOK_RECURSION_GUARD"
 
 
 def main() -> int:

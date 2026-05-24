@@ -2,12 +2,12 @@
 
 검증 대상:
 - prompt_hash: 같은 input 같은 hash, 다른 input 다른 hash
-- cache_enabled: default true, MV2_EXTRACTOR_CACHE_DISABLE=1 false
+- cache_enabled: default true, MV3_EXTRACTOR_CACHE_DISABLE=1 false
 - cache_put + cache_get round-trip (빈 list 도 저장)
 - cache_get hit 시 hit_count 증가
 - cache_clear / cache_stats
 - extract_from_jsonl 첫 호출 Gemma + cache_put, 두 번째 cache hit (Gemma 안 호출)
-- MV2_EXTRACTOR_CACHE_DISABLE=1 → 매번 Gemma 재호출
+- MV3_EXTRACTOR_CACHE_DISABLE=1 → 매번 Gemma 재호출
 """
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ class CacheTestBase(unittest.TestCase):
         ec._initialized = False
         self.ec = ec
         # default env: cache enabled
-        os.environ.pop("MV2_EXTRACTOR_CACHE_DISABLE", None)
+        os.environ.pop("MV3_EXTRACTOR_CACHE_DISABLE", None)
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -64,11 +64,11 @@ class TestCacheEnabled(CacheTestBase):
         self.assertTrue(self.ec.cache_enabled())
 
     def test_disable_env(self):
-        os.environ["MV2_EXTRACTOR_CACHE_DISABLE"] = "1"
+        os.environ["MV3_EXTRACTOR_CACHE_DISABLE"] = "1"
         try:
             self.assertFalse(self.ec.cache_enabled())
         finally:
-            os.environ.pop("MV2_EXTRACTOR_CACHE_DISABLE", None)
+            os.environ.pop("MV3_EXTRACTOR_CACHE_DISABLE", None)
 
 
 class TestPutGet(CacheTestBase):
@@ -101,18 +101,18 @@ class TestPutGet(CacheTestBase):
 
     def test_disable_env_makes_get_return_none(self):
         self.ec.cache_put("p", [{"type": "feedback", "title": "z", "body": "z"}])
-        os.environ["MV2_EXTRACTOR_CACHE_DISABLE"] = "1"
+        os.environ["MV3_EXTRACTOR_CACHE_DISABLE"] = "1"
         try:
             self.assertIsNone(self.ec.cache_get("p"))
         finally:
-            os.environ.pop("MV2_EXTRACTOR_CACHE_DISABLE", None)
+            os.environ.pop("MV3_EXTRACTOR_CACHE_DISABLE", None)
 
     def test_disable_env_makes_put_noop(self):
-        os.environ["MV2_EXTRACTOR_CACHE_DISABLE"] = "1"
+        os.environ["MV3_EXTRACTOR_CACHE_DISABLE"] = "1"
         try:
             self.ec.cache_put("p", [{"type": "feedback", "title": "z", "body": "z"}])
         finally:
-            os.environ.pop("MV2_EXTRACTOR_CACHE_DISABLE", None)
+            os.environ.pop("MV3_EXTRACTOR_CACHE_DISABLE", None)
         # 재 활성화 후 조회 → 없음
         self.assertIsNone(self.ec.cache_get("p"))
 
@@ -167,7 +167,7 @@ class TestExtractIntegration(CacheTestBase):
 
         with tempfile.TemporaryDirectory() as tmp:
             jsonl = self._make_jsonl(Path(tmp))
-            with patch.dict(os.environ, {"MV2_EXTRACTOR_GEMMA_RETRIES": "0"}):
+            with patch.dict(os.environ, {"MV3_EXTRACTOR_GEMMA_RETRIES": "0"}):
                 sys.modules.pop("memory_extractor", None)
                 import memory_extractor as me
                 with patch.object(me, "call_gemma", side_effect=fake_gemma):
@@ -189,8 +189,8 @@ class TestExtractIntegration(CacheTestBase):
         with tempfile.TemporaryDirectory() as tmp:
             jsonl = self._make_jsonl(Path(tmp))
             with patch.dict(os.environ, {
-                "MV2_EXTRACTOR_GEMMA_RETRIES": "0",
-                "MV2_EXTRACTOR_CACHE_DISABLE": "1",
+                "MV3_EXTRACTOR_GEMMA_RETRIES": "0",
+                "MV3_EXTRACTOR_CACHE_DISABLE": "1",
             }):
                 sys.modules.pop("memory_extractor", None)
                 import memory_extractor as me

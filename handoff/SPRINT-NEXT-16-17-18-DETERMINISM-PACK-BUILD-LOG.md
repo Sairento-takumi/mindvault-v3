@@ -15,11 +15,11 @@ NEXT-12/15 stateless 가정의 본질 해결책.
 ### 1.1 설계
 
 `src/extractor_cache.py` 신규:
-- 캐시 DB: `~/.claude/mindvault-v2/extractor_cache.db` (sqlite WAL)
+- 캐시 DB: `~/.claude/mindvault-v3/extractor_cache.db` (sqlite WAL)
 - key: `hashlib.sha256(prompt.encode("utf-8")).hexdigest()`
 - 값: `candidates_json` (json.dumps list[dict]) + count + ts + hit_count
 - API: `cache_get`, `cache_put`, `cache_stats`, `cache_clear`, `prompt_hash`
-- opt-out: `MV2_EXTRACTOR_CACHE_DISABLE=1`
+- opt-out: `MV3_EXTRACTOR_CACHE_DISABLE=1`
 
 `extract_from_jsonl` 통합:
 ```python

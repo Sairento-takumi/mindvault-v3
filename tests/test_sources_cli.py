@@ -81,7 +81,7 @@ class TestIndexerExtraDirsUnion(unittest.TestCase):
             with patch.object(memory_indexer, "SOURCES_CONFIG", cfg), \
                  patch.dict(
                      "os.environ",
-                     {"MV2_EXTRA_MEMORY_DIRS": "/path/from/env:/shared"},
+                     {"MV3_EXTRA_MEMORY_DIRS": "/path/from/env:/shared"},
                  ):
                 dirs = memory_indexer._extra_memory_dirs()
             paths = [str(p) for p in dirs]
@@ -99,7 +99,7 @@ class TestIndexerExtraDirsUnion(unittest.TestCase):
             with patch.object(memory_indexer, "SOURCES_CONFIG", cfg), \
                  patch.dict(
                      "os.environ",
-                     {"MV2_EXTRA_MEMORY_DIRS": "/env_only"},
+                     {"MV3_EXTRA_MEMORY_DIRS": "/env_only"},
                  ):
                 dirs = memory_indexer._extra_memory_dirs()
             paths = [str(p) for p in dirs]
@@ -112,6 +112,6 @@ class TestIndexerExtraDirsUnion(unittest.TestCase):
             with patch.object(memory_indexer, "SOURCES_CONFIG", cfg), \
                  patch.dict("os.environ", {}, clear=False):
                 import os
-                os.environ.pop("MV2_EXTRA_MEMORY_DIRS", None)
+                os.environ.pop("MV3_EXTRA_MEMORY_DIRS", None)
                 dirs = memory_indexer._extra_memory_dirs()
             self.assertEqual(dirs, [])

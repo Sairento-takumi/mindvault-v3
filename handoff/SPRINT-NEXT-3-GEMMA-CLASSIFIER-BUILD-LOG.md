@@ -1,13 +1,13 @@
 ---
 name: handoff-sprint-next-3-gemma-classifier
-description: V3-NEXT-IMPROVEMENTS #3 — query_intent.classify_with_gemma 신규. rule-based 가 unknown 으로 떨어진 짧은 query (≤40자) 에 한해 Gemma 로 보강 분류. opt-in env MV2_GEMMA_INTENT=1, timeout 2s, 실패 시 graceful 폴백.
+description: V3-NEXT-IMPROVEMENTS #3 — query_intent.classify_with_gemma 신규. rule-based 가 unknown 으로 떨어진 짧은 query (≤40자) 에 한해 Gemma 로 보강 분류. opt-in env MV3_GEMMA_INTENT=1, timeout 2s, 실패 시 graceful 폴백.
 ---
 
 MindVault v3 → 차기 보강 #3 — Gemma 보강 classifier 빌드 로그
 
 ## 요약
 
-V3-NEXT-IMPROVEMENTS #3 해결. Sprint 16 의 rule-based query_intent classifier 가 unknown 영역에서 borderline 잡담·메타를 그대로 회수 호출로 흘려보내는 문제를 Gemma 보강으로 막는다. 운영 안정성을 위해 default off — `MV2_GEMMA_INTENT=1` opt-in 일 때만 발동.
+V3-NEXT-IMPROVEMENTS #3 해결. Sprint 16 의 rule-based query_intent classifier 가 unknown 영역에서 borderline 잡담·메타를 그대로 회수 호출로 흘려보내는 문제를 Gemma 보강으로 막는다. 운영 안정성을 위해 default off — `MV3_GEMMA_INTENT=1` opt-in 일 때만 발동.
 
 master HEAD `143d4ad` (NEXT-2 embedding 매칭) 기준 worktree `worktree-next-3-gemma-classifier` 에서 작업.
 
@@ -24,7 +24,7 @@ master HEAD `143d4ad` (NEXT-2 embedding 매칭) 기준 worktree `worktree-next-3
 
 ### A. `src/query_intent.py`
 
-- 새 상수: `GEMMA_INTENT_URL`, `GEMMA_INTENT_MODEL`, `GEMMA_INTENT_TIMEOUT=2.0`, `GEMMA_INTENT_MAX_LEN=40`, `ENABLE_GEMMA_INTENT_ENV="MV2_GEMMA_INTENT"`.
+- 새 상수: `GEMMA_INTENT_URL`, `GEMMA_INTENT_MODEL`, `GEMMA_INTENT_TIMEOUT=2.0`, `GEMMA_INTENT_MAX_LEN=40`, `ENABLE_GEMMA_INTENT_ENV="MV3_GEMMA_INTENT"`.
 - `gemma_intent_enabled() -> bool`: env 가 정확히 `"1"` 일 때만 True. `auto_compile_enabled` 와 동일 패턴.
 - `_call_gemma_intent(prompt_text) -> str | None`: localhost:8080 chat completion 호출. 실패 시 None + debug log.
 - `_normalize_gemma_label(raw) -> str | None`: 첫 영문 토큰 lowercase. `_VALID_GEMMA_LABELS = {chat, meta, code, recall, other}` 안의 라벨만 반환.
@@ -76,7 +76,7 @@ if should_skip_recall(intent_obj):
 - Sprint 10 트랜잭션 패턴 무변경.
 - BGE plist / `bge_m3_server.py` 무변경.
 - launchctl 서비스 무관.
-- default off — 형이 명시적 `export MV2_GEMMA_INTENT=1` 해야 발동.
+- default off — 형이 명시적 `export MV3_GEMMA_INTENT=1` 해야 발동.
 - Gemma 미응답·timeout 시 rule-based 폴백 (recall flow 유지).
 - worktree 격리.
 

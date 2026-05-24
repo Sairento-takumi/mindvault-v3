@@ -1,7 +1,7 @@
 """Sprint 4 Task 8 — E2E 통합 테스트.
 
 선결조건: BGE-M3 서버 기동 + production index.db에 메모리 인덱싱 완료.
-MV2_SKIP_INTEGRATION=1 환경변수로 skip 가능 (CI에서).
+MV3_SKIP_INTEGRATION=1 환경변수로 skip 가능 (CI에서).
 """
 import json
 import os
@@ -29,8 +29,8 @@ def _hook_call(prompt: str, timeout: float = 5.0):
 
 
 @unittest.skipIf(
-    os.environ.get("MV2_SKIP_INTEGRATION") == "1",
-    "MV2_SKIP_INTEGRATION=1",
+    os.environ.get("MV3_SKIP_INTEGRATION") == "1",
+    "MV3_SKIP_INTEGRATION=1",
 )
 class TestE2E(unittest.TestCase):
 

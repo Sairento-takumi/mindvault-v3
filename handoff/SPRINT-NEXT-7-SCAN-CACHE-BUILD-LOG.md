@@ -14,7 +14,7 @@ master HEAD `b431e16` (NEXT-6 slug conflict) 기준 worktree `worktree-next-7-sc
 ## 자율 결정 사유
 
 - **opt-in `--use-cache` 플래그** — 기본 동작 (직접 parsing) 보존. 캐시 로직 버그·schema 손상이 있어도 형이 플래그 빼면 즉시 기존 경로. 운영 검증 누적 후 default-on 결정 가능.
-- **sqlite 캐시 (별도 DB `turns_cache.db`)** — 기존 `~/.claude/mindvault-v2/index.db` 와 분리. memory 인덱스(FTS5+vec) 와 self_eval 캐시는 schema·용도 완전 다름, 한 DB 에 합치면 마이그레이션·잠금 충돌 위험. 별도 파일이 안전.
+- **sqlite 캐시 (별도 DB `turns_cache.db`)** — 기존 `~/.claude/mindvault-v3/index.db` 와 분리. memory 인덱스(FTS5+vec) 와 self_eval 캐시는 schema·용도 완전 다름, 한 DB 에 합치면 마이그레이션·잠금 충돌 위험. 별도 파일이 안전.
 - **mtime_ns 단위 변경 감지** — Python `Path.stat().st_mtime_ns` 가 1ns 정밀도. 운영 jsonl 은 SessionEnd 한 번에 새 jsonl 만들거나 append → mtime 항상 갱신. 변경 0인 jsonl 은 skip.
 - **jsonl 삭제 처리 안 함** — 운영 jsonl 는 누적만 됨 (claude 가 새 sessionId 마다 새 파일). 삭제 시나리오 미존재 → 처리 안 함이 단순. 만약 형이 수동 삭제하면 캐시에 stale row 남지만 since_unix 필터링 +최신 jsonl 이 우선이라 분석 결과에 영향 없음. 수동 cleanup 은 `rebuild` CLI 로 가능.
 - **turns_cache 가 self_eval 의 load_turns + iter_session_jsonl_paths 재사용** — 본질적 turn 추출 로직 (system-reminder 필터, tool_use 추출, hook artifact 제외) 은 self_eval 한 곳에만 있어야 정합 유지. 캐시는 그 결과를 저장만.
@@ -93,7 +93,7 @@ tests/test_turns_cache.py: 7/7 PASS (0.03s)
 - `indexer.full_rebuild()` (memory 인덱스) 호출 없음 — 별도 DB.
 - Sprint 10 트랜잭션 패턴 무관 (캐시는 별도 모듈).
 - BGE plist / `bge_m3_server.py` 무변경.
-- launchctl 서비스 (`arctic-ko-mlx`, `gemma-mlx`, `mv2-env`) 무관.
+- launchctl 서비스 (`arctic-ko-mlx`, `gemma-mlx`, `mv3-env`) 무관.
 - self_eval 기존 동작 보존 (--use-cache 옵션). 캐시 실패 시 graceful 폴백.
 - worktree 격리.
 

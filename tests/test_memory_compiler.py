@@ -324,18 +324,18 @@ class TestAutoCompileEnabled(unittest.TestCase):
         import memory_compiler
         with patch.dict("os.environ", {}, clear=False):
             import os
-            os.environ.pop("MV2_AUTO_COMPILE", None)
+            os.environ.pop("MV3_AUTO_COMPILE", None)
             self.assertFalse(memory_compiler.auto_compile_enabled())
 
     def test_on_when_one(self):
         import memory_compiler
-        with patch.dict("os.environ", {"MV2_AUTO_COMPILE": "1"}):
+        with patch.dict("os.environ", {"MV3_AUTO_COMPILE": "1"}):
             self.assertTrue(memory_compiler.auto_compile_enabled())
 
     def test_off_for_other_values(self):
         import memory_compiler
         for val in ("0", "true", "yes", ""):
-            with patch.dict("os.environ", {"MV2_AUTO_COMPILE": val}):
+            with patch.dict("os.environ", {"MV3_AUTO_COMPILE": val}):
                 self.assertFalse(
                     memory_compiler.auto_compile_enabled(),
                     f"unexpected on for {val!r}",

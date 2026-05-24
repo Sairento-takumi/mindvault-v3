@@ -3,7 +3,7 @@
 
 Sprint 15 BUILD-LOG §"미해결" #5 해소.
 
-Sprint 14 의 Memory Compiler 는 opt-in (MV2_AUTO_COMPILE=1) 상태라 운영 fire 0건.
+Sprint 14 의 Memory Compiler 는 opt-in (MV3_AUTO_COMPILE=1) 상태라 운영 fire 0건.
 형이 켜기 전에 Gemma 정제 호출의 latency·성공률·응답 길이 분포를 안전하게 측정.
 
 설계:
@@ -48,7 +48,7 @@ SCENARIOS = [
         {
             "title": "Memory Compiler",
             "body": (
-                "opt-in env MV2_AUTO_COMPILE=1 로 활성. 매칭은 frontmatter name 우선, "
+                "opt-in env MV3_AUTO_COMPILE=1 로 활성. 매칭은 frontmatter name 우선, "
                 "slug fallback. update_of/diff_summary 메타 부착."
             ),
         },

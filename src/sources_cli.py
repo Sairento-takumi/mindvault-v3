@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """MindVault v3 Sprint 16 — Multi-source 등록 CLI.
 
-추가 indexing scope 를 `~/.claude/mindvault-v2/sources.json` 에 영구 등록.
-Sprint 11 의 `MV2_EXTRA_MEMORY_DIRS` env var 와 union 으로 동작 — env 는 shell
+추가 indexing scope 를 `~/.claude/mindvault-v3/sources.json` 에 영구 등록.
+Sprint 11 의 `MV3_EXTRA_MEMORY_DIRS` env var 와 union 으로 동작 — env 는 shell
 session 동안만, config 는 영구.
 
 사용:
@@ -19,7 +19,7 @@ import json
 import sys
 from pathlib import Path
 
-DATA_DIR = Path("/Users/yonghaekim/.claude/mindvault-v2")
+DATA_DIR = Path("/Users/yonghaekim/.claude/mindvault-v3")
 CONFIG_PATH = DATA_DIR / "sources.json"
 
 

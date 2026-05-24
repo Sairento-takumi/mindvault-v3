@@ -24,14 +24,19 @@ from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
 
-DEBUG_LOG = Path("/Users/yonghaekim/.claude/mindvault-v2/debug.log")
+DEBUG_LOG = Path("/Users/yonghaekim/.claude/mindvault-v3/debug.log")
 STAGED_DIRS = (
     Path("/Users/yonghaekim/.claude/projects/-Users-yonghaekim-my-folder/memory/_staged"),
     Path("/Users/yonghaekim/.claude/projects/-Users-yonghaekim-my-folder/memory/_procedural/_staged"),
 )
-PROD = Path("/Users/yonghaekim/.claude/scripts/mindvault")
-if str(PROD) not in sys.path:
-    sys.path.insert(0, str(PROD))
+_HOOK_DIR = Path(__file__).resolve().parent
+if (_HOOK_DIR / "memory_extractor.py").is_file():
+    if str(_HOOK_DIR) not in sys.path:
+        sys.path.insert(0, str(_HOOK_DIR))
+else:
+    PROD = Path("/Users/yonghaekim/.claude/scripts/mindvault")
+    if str(PROD) not in sys.path:
+        sys.path.insert(0, str(PROD))
 
 TS_RE = re.compile(r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]\s+(.*)$")
 

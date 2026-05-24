@@ -34,9 +34,9 @@ GEMMA_INTENT_URL = "http://localhost:8080/v1/chat/completions"
 GEMMA_INTENT_MODEL = "mlx-community/gemma-4-e4b-it-4bit"
 GEMMA_INTENT_TIMEOUT = 2.0
 GEMMA_INTENT_MAX_LEN = 40  # 그 이상 query 는 Gemma 호출 안 함 (cost / latency)
-ENABLE_GEMMA_INTENT_ENV = "MV2_GEMMA_INTENT"
+ENABLE_GEMMA_INTENT_ENV = "MV3_GEMMA_INTENT"
 
-_DEBUG_LOG = Path("/Users/yonghaekim/.claude/mindvault-v2/debug.log")
+_DEBUG_LOG = Path("/Users/yonghaekim/.claude/mindvault-v3/debug.log")
 
 
 def _debug(msg: str) -> None:

@@ -29,7 +29,7 @@ PROCEDURAL_DIR = MEMORY_DIR / "_procedural"
 PROCEDURAL_STAGED_DIR = PROCEDURAL_DIR / "_staged"
 STAGED_DIRS = (STAGED_DIR, PROCEDURAL_STAGED_DIR)
 INDEX_MD = MEMORY_DIR / "MEMORY.md"
-DEBUG_LOG = Path("/Users/yonghaekim/.claude/mindvault-v2/debug.log")
+DEBUG_LOG = Path("/Users/yonghaekim/.claude/mindvault-v3/debug.log")
 STAGED_TTL_DAYS = 30
 
 # Sprint NEXT-5 — ANSI 색상 diff 출력. 형이 매 update 검토 시 +/- 식별 비용 ↓.

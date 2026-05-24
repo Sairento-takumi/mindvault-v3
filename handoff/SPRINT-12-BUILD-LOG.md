@@ -110,7 +110,7 @@ for path, info in combined.items():
 
 1. **V3-PLAN.md 처리** — 본 repo master untracked. 형 의도적 제외인지, 미완성 작업물인지 확인 필요. 의도적이라면 `.gitignore` 추가, 회수 대상이라면 frontmatter + git add.
 2. **duplicate memory dedup** — Sprint 11 미해결, `-Users-yonghaekim/` vs `-Users-yonghaekim-my-folder/` 동명 메모리.
-3. **install.sh 에 `MV2_EXTRA_MEMORY_DIRS` 안내** — 현재 형 shell rc 수동 export 필요 (이번 Sprint 11 활성화로 완료).
+3. **install.sh 에 `MV3_EXTRA_MEMORY_DIRS` 안내** — 현재 형 shell rc 수동 export 필요 (이번 Sprint 11 활성화로 완료).
 4. **embed_cache test isolation** — `test_embed_timeout_returns_none` master HEAD 부터 pre-existing fail.
 
 ## 변경 파일

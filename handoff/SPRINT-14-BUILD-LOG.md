@@ -1,6 +1,6 @@
 ---
 name: handoff-sprint14-build-log
-description: Sprint 14 build log — Memory Compiler (LLM-as-compiler 패턴). SessionEnd 후보가 기존 memory 와 매칭되면 Gemma 로 정제·통합해 update_of 메타 부착, /memory_review diff + approve update flow 지원. opt-in MV2_AUTO_COMPILE=1
+description: Sprint 14 build log — Memory Compiler (LLM-as-compiler 패턴). SessionEnd 후보가 기존 memory 와 매칭되면 Gemma 로 정제·통합해 update_of 메타 부착, /memory_review diff + approve update flow 지원. opt-in MV3_AUTO_COMPILE=1
 ---
 
 MindVault v2 → v3 Sprint 14 — Memory Compiler 빌드 로그
@@ -9,7 +9,7 @@ MindVault v2 → v3 Sprint 14 — Memory Compiler 빌드 로그
 
 Karpathy LLM-as-compiler 패턴 첫 구현. SessionEnd 에서 extractor 가 뽑은 후보를 그냥 staged 디렉토리에 던지지 않고, **기존 메모리와 매칭** 단계 추가. 매칭 있으면 Gemma 가 기존 본문 + 새 fact 를 통합해 정제된 update body 생성. 검토는 `/memory_review diff <file>` 으로 unified diff 보고 approve. approve 시 기존 파일 `.bak` 백업 후 overwrite.
 
-master HEAD `87c7a09` (Sprint 13) 기준. opt-in: `export MV2_AUTO_COMPILE=1` 일 때만 활성. 기본 비활성 — 기존 v2.9.2 + Sprint 13 흐름 그대로 보존.
+master HEAD `87c7a09` (Sprint 13) 기준. opt-in: `export MV3_AUTO_COMPILE=1` 일 때만 활성. 기본 비활성 — 기존 v2.9.2 + Sprint 13 흐름 그대로 보존.
 
 ## 자율 결정 사유
 
@@ -137,7 +137,7 @@ tests/test_memory_compiler.py: 21/21 PASS (0.06s)
 - Sprint 10 트랜잭션 패턴 무변경.
 - BGE plist + `bge_m3_server.py` 무변경.
 - launchctl `com.yonghaekim.arctic-ko-mlx` 무관.
-- 기본 비활성 (`MV2_AUTO_COMPILE` 미설정 시) — 형이 명시적으로 export 해야 발동.
+- 기본 비활성 (`MV3_AUTO_COMPILE` 미설정 시) — 형이 명시적으로 export 해야 발동.
 - 기존 `memory/*.md` 자산은 .bak 백업 후에만 overwrite. approve 의 명시적 사용자 액션 + diff 검토 거침.
 - worktree `v3-sprint-13-16` 격리 유지.
 

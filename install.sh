@@ -41,7 +41,7 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 
-mkdir -p "$HOOKS_DIR" "$HOME/.claude/mindvault-v2/cache" "$SCRIPTS_DIR" "$COMMANDS_DIR"
+mkdir -p "$HOOKS_DIR" "$HOME/.claude/mindvault-v3/cache" "$SCRIPTS_DIR" "$COMMANDS_DIR"
 cp "$SRC" "$TARGET"
 chmod +x "$TARGET"
 echo "✓ copied hook to $TARGET"
@@ -160,7 +160,7 @@ fi
 echo ""
 echo "→ Building FTS5 search index (Sprint 2)..."
 if python3 "$SCRIPTS_DIR/indexer.py" >/dev/null 2>&1; then
-  cnt=$(sqlite3 "$HOME/.claude/mindvault-v2/index.db" "SELECT COUNT(*) FROM sessions" 2>/dev/null || echo "?")
+  cnt=$(sqlite3 "$HOME/.claude/mindvault-v3/index.db" "SELECT COUNT(*) FROM sessions" 2>/dev/null || echo "?")
   echo "✓ indexed $cnt sessions"
 else
   echo "  (index build skipped)"

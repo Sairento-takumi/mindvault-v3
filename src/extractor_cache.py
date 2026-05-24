@@ -3,8 +3,8 @@
 같은 prompt SHA256 hash → 캐시 hit. Gemma 안 호출, 즉시 결과 반환.
 jsonl 이 변하면 prompt 가 달라져 hash 도 달라지므로 자동 invalidate.
 
-캐시 위치: ~/.claude/mindvault-v2/extractor_cache.db (sqlite)
-opt-out: MV2_EXTRACTOR_CACHE_DISABLE=1
+캐시 위치: ~/.claude/mindvault-v3/extractor_cache.db (sqlite)
+opt-out: MV3_EXTRACTOR_CACHE_DISABLE=1
 """
 from __future__ import annotations
 
@@ -17,8 +17,8 @@ import time
 from pathlib import Path
 from typing import Optional
 
-CACHE_DB = Path("/Users/yonghaekim/.claude/mindvault-v2/extractor_cache.db")
-CACHE_DISABLE_ENV = "MV2_EXTRACTOR_CACHE_DISABLE"
+CACHE_DB = Path("/Users/yonghaekim/.claude/mindvault-v3/extractor_cache.db")
+CACHE_DISABLE_ENV = "MV3_EXTRACTOR_CACHE_DISABLE"
 
 _init_lock = threading.Lock()
 _initialized = False

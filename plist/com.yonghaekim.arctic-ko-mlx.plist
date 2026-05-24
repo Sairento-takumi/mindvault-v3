@@ -8,7 +8,7 @@
     <key>ProgramArguments</key>
     <array>
         <string>/Library/Frameworks/Python.framework/Versions/3.10/bin/python3</string>
-        <string>/Users/yonghaekim/my-folder/apps/mindvault-v2/scripts/arctic_ko_server.py</string>
+        <string>/Users/yonghaekim/my-folder/apps/mindvault-v3/scripts/arctic_ko_server.py</string>
     </array>
 
     <key>EnvironmentVariables</key>

@@ -36,7 +36,7 @@ class TestExtractorProceduralType(unittest.TestCase):
             "이 syntax 자주 쓰니까 기억해둬",
             "이렇게 하면 백그라운드 실행돼",
             "이 workflow 반복해서 쓸 거야",
-            "환경설정 한 줄: export MV2_EXTRA_MEMORY_DIRS=...",
+            "환경설정 한 줄: export MV3_EXTRA_MEMORY_DIRS=...",
             "이 옵션 외워둬",
             "이 flag 자주 쓴다",
         ]

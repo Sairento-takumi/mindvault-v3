@@ -4,7 +4,7 @@
 - ACK_RE: 형의 한국어/영어 단순 confirmation 패턴 매칭 + 잡담 false positive 차단
 - _is_significant_assistant: bash_commands OR text ≥ 200자
 - has_trigger: significant assistant + 짧은 ACK 결합 시 True (NEXT-10 분기)
-- MV2_EXTRACTOR_ACK_TRIGGER=0 환경 변수로 OFF 가능 (재로드 검증)
+- MV3_EXTRACTOR_ACK_TRIGGER=0 환경 변수로 OFF 가능 (재로드 검증)
 """
 from __future__ import annotations
 
@@ -134,7 +134,7 @@ class TestHasTriggerAckLayer(unittest.TestCase):
         self.assertFalse(has_trigger(msgs))
 
     def test_env_disables_ack_trigger(self):
-        with patch.dict(os.environ, {"MV2_EXTRACTOR_ACK_TRIGGER": "0"}):
+        with patch.dict(os.environ, {"MV3_EXTRACTOR_ACK_TRIGGER": "0"}):
             sys.modules.pop("memory_extractor", None)
             from memory_extractor import has_trigger
             msgs = [

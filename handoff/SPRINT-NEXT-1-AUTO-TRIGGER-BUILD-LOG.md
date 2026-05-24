@@ -139,7 +139,7 @@ $ self_eval.py --procedural-audit --hours 720
 - `indexer.full_rebuild()` 호출 없음.
 - Sprint 10 트랜잭션 패턴 무변경.
 - BGE plist / `bge_m3_server.py` 무변경 (롤백 경로 보존).
-- launchctl 서비스 (`com.yonghaekim.arctic-ko-mlx`, `com.yonghaekim.gemma-mlx`, `com.yonghaekim.mv2-env`) 무관.
+- launchctl 서비스 (`com.yonghaekim.arctic-ko-mlx`, `com.yonghaekim.gemma-mlx`, `com.yonghaekim.mv3-env`) 무관.
 - worktree `next-1-auto-trigger` 격리.
 - 기존 `memory/*.md` / `_procedural/*.md` 자산 무변경.
 - Sprint 17 ship 관련 자동 제안 금지 — 본 build log 끝에 다음 sprint 권유 없음.

@@ -19,13 +19,13 @@ description: V3 차기 보강 7개 micro-sprint 후보 brief — 자동 trigger 
 
 ## 환경 (현재 상태)
 
-- 작업 dir: `/Users/yonghaekim/my-folder/apps/mindvault-v2`
+- 작업 dir: `/Users/yonghaekim/my-folder/apps/mindvault-v3`
 - master HEAD: `97ac2ee feat(compiler_benchmark): Memory Compiler latency benchmark`
 - 운영 임베딩: Arctic-ko MLX 4bit, port 8081
-- DB: `~/.claude/mindvault-v2/index.db` (WAL)
+- DB: `~/.claude/mindvault-v3/index.db` (WAL)
 - Hook: Sprint 13~16 + intent classifier + sources.json multi-source ON
 - 운영 sources.json: `handoff/` + auto-memory dir 영구 등록
-- **Memory Compiler ON 상태** (`MV2_AUTO_COMPILE=1`, LaunchAgent `com.yonghaekim.mv2-env.plist` 영구화 완료)
+- **Memory Compiler ON 상태** (`MV3_AUTO_COMPILE=1`, LaunchAgent `com.yonghaekim.mv3-env.plist` 영구화 완료)
 - 한국어 응답, 토큰 절약 룰 (CLAUDE.md 참조)
 - Three Man Team 사용 가능 (Arch / Bob / Richard)
 
@@ -119,7 +119,7 @@ description: V3 차기 보강 7개 micro-sprint 후보 brief — 자동 trigger 
 **현 상태**: `analyze_recent --hours 168` 실측 ~50초. 모든 jsonl turn 메모리 로드. `--hours 720` (30일) 면 더 길어짐 — Bash CLI 호출이 답답함.
 
 **해결 방향**:
-- jsonl 인덱싱 캐시: `~/.claude/mindvault-v2/turns_cache.db` 같은 sqlite 에 (ts, role, text, tool_uses) 사전 정리
+- jsonl 인덱싱 캐시: `~/.claude/mindvault-v3/turns_cache.db` 같은 sqlite 에 (ts, role, text, tool_uses) 사전 정리
 - analyze 시점에 캐시만 query → 50s → <5s 예상
 - mtime watch 로 새 jsonl 자동 incremental update
 - `--rebuild-cache` 플래그 별도
@@ -139,7 +139,7 @@ description: V3 차기 보강 7개 micro-sprint 후보 brief — 자동 trigger 
 - `indexer.full_rebuild()` 호출 금지
 - Sprint 10 트랜잭션 패턴 (매 iter conn.commit + embed_text reordering) 유지
 - BGE plist + `bge_m3_server.py` 보존 (롤백 경로)
-- 운영 launchctl 서비스 (`com.yonghaekim.arctic-ko-mlx`, `com.yonghaekim.gemma-mlx`, `com.yonghaekim.mv2-env`) 건드리지 말 것
+- 운영 launchctl 서비스 (`com.yonghaekim.arctic-ko-mlx`, `com.yonghaekim.gemma-mlx`, `com.yonghaekim.mv3-env`) 건드리지 말 것
 - 작업 시작 시 **EnterWorktree 격리** (예: `next-N-<항목명>`)
 - 변경 전 production 위치 (`~/.claude/scripts/mindvault/` + `~/.claude/hooks/`) 백업
 - 회귀 검증 필수 (잡담 차단, 도메인 hit, 동시성 lock 0건)

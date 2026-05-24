@@ -18,10 +18,10 @@ import traceback
 from pathlib import Path
 
 PROJECTS_DIR = Path("/Users/yonghaekim/.claude/projects/-Users-yonghaekim-my-folder")
-CACHE_DIR = Path("/Users/yonghaekim/.claude/mindvault-v2/cache")
-DEBUG_LOG = Path("/Users/yonghaekim/.claude/mindvault-v2/debug.log")
+CACHE_DIR = Path("/Users/yonghaekim/.claude/mindvault-v3/cache")
+DEBUG_LOG = Path("/Users/yonghaekim/.claude/mindvault-v3/debug.log")
 SIGNATURE = "# 지난 세션 요약 (MindVault v2)"
-RECURSION_GUARD_ENV = "MV2_HOOK_RECURSION_GUARD"
+RECURSION_GUARD_ENV = "MV3_HOOK_RECURSION_GUARD"
 CLAUDE_FALLBACK_PATH = "/Users/yonghaekim/.nvm/versions/node/v24.13.0/bin/claude"
 CLAUDE_MODEL = "haiku"
 CLAUDE_TIMEOUT = 90  # subprocess cap (startup + plugin sync + model 합쳐서 여유)

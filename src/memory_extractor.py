@@ -13,7 +13,7 @@ import traceback
 import urllib.request
 from pathlib import Path
 
-DATA_DIR = Path("/Users/yonghaekim/.claude/mindvault-v2")
+DATA_DIR = Path("/Users/yonghaekim/.claude/mindvault-v3")
 DEBUG_LOG = DATA_DIR / "debug.log"
 GEMMA_URL = "http://localhost:8080/v1/chat/completions"
 GEMMA_MODEL = "mlx-community/gemma-4-e4b-it-4bit"
@@ -59,7 +59,7 @@ NEXT_ACTION_RE = re.compile(
 # 안전선:
 # 1) 직전 assistant 가 의미있는 변경 시그널 (Bash tool_use 있음 OR text ≥ 200자)
 # 2) user turn 짧음 (≤ 30자) — 잡담 긴 답변 차단
-# 3) MV2_EXTRACTOR_ACK_TRIGGER=0 으로 끌 수 있음 (false positive 측정 후 튜닝)
+# 3) MV3_EXTRACTOR_ACK_TRIGGER=0 으로 끌 수 있음 (false positive 측정 후 튜닝)
 ACK_RE = re.compile(
     r"^(좋[아네아으]|굳|굿|good|nice|perfect|훌륭|ㅇㅇ|ㅇㅋ|어|네|예|"
     r"OK|ok|오케이|콜|땡큐|thx|thanks|감사|👍|✓|✔|💯|확인|"
@@ -68,7 +68,7 @@ ACK_RE = re.compile(
     re.IGNORECASE,
 )
 SIGNIFICANT_ASSISTANT_TEXT_LEN = 200
-ACK_TRIGGER_ENABLED = os.environ.get("MV2_EXTRACTOR_ACK_TRIGGER", "1") == "1"
+ACK_TRIGGER_ENABLED = os.environ.get("MV3_EXTRACTOR_ACK_TRIGGER", "1") == "1"
 
 
 def _is_significant_assistant(m: dict) -> bool:
@@ -209,7 +209,7 @@ def has_trigger(messages: list[dict]) -> bool:
     1. TRIGGER_RE — 명시 키워드 (기억해/결정:/외워둬/이 명령어 …). 항상 ON.
     2. NEXT-1 휴리스틱 — special/non_trivial bash + 직후 user NEXT_ACTION. 항상 ON.
     3. NEXT-10 ACK 휴리스틱 — significant assistant + 직후 user 짧은 ACK.
-       MV2_EXTRACTOR_ACK_TRIGGER=0 으로 OFF 가능.
+       MV3_EXTRACTOR_ACK_TRIGGER=0 으로 OFF 가능.
 
     Gemma 가 최종 판별. trigger 는 "이 세션에 procedural/decision 후보가 있을 가능성"
     1차 필터. 분기된 trigger 사유는 _debug 로 가시화 (self_eval 측정 인프라).
@@ -354,38 +354,38 @@ def parse_gemma_json(out: str) -> list[dict]:
 
 
 def _retries() -> int:
-    """MV2_EXTRACTOR_GEMMA_RETRIES — Gemma candidate 0건일 때 추가 호출 횟수.
+    """MV3_EXTRACTOR_GEMMA_RETRIES — Gemma candidate 0건일 때 추가 호출 횟수.
 
     NEXT-15 진단: 같은 input 두 번 호출에서 3건 → 0건 (Gemma 비결정성, temp 0.2).
     retry + union 으로 hit ratio 끌어올림. 본질적으로 LLM stochasticity 흡수책.
     default 2 = 최초 1회 + 추가 retry 2회 = 최대 3 호출. latency 부담 vs recall trade-off.
     """
     try:
-        return max(0, int(os.environ.get("MV2_EXTRACTOR_GEMMA_RETRIES", "2")))
+        return max(0, int(os.environ.get("MV3_EXTRACTOR_GEMMA_RETRIES", "2")))
     except ValueError:
         return 2
 
 
 def _tail_turns() -> int:
-    """MV2_EXTRACTOR_TAIL_TURNS — load_tail_messages 가 읽는 마지막 turn 수.
+    """MV3_EXTRACTOR_TAIL_TURNS — load_tail_messages 가 읽는 마지막 turn 수.
 
     NEXT-15 진단: trigger 60% miss 의 일부는 tail 40 안에 trigger 패턴이 없어서.
     window 늘리면 (default 80) Gemma prompt 길어지지만 trigger 와 컨텍스트 모두 풍부.
     """
     try:
-        return max(10, int(os.environ.get("MV2_EXTRACTOR_TAIL_TURNS", "80")))
+        return max(10, int(os.environ.get("MV3_EXTRACTOR_TAIL_TURNS", "80")))
     except ValueError:
         return 80
 
 
 def _always_fire() -> bool:
-    """MV2_EXTRACTOR_ALWAYS_FIRE=1 — has_trigger 결과 무시하고 항상 Gemma 호출.
+    """MV3_EXTRACTOR_ALWAYS_FIRE=1 — has_trigger 결과 무시하고 항상 Gemma 호출.
 
     NEXT-15 진단: trigger 게이트 통과 못 한 세션 60% 가 사실은 영구 기억 가치 있을
     수 있음. opt-in 으로 게이트 우회. Gemma fire 비용 ↑ but recall 폭 본질 해결.
     candidates 0 면 부담 거의 없음 (latency 만 1회 추가).
     """
-    return os.environ.get("MV2_EXTRACTOR_ALWAYS_FIRE", "0") == "1"
+    return os.environ.get("MV3_EXTRACTOR_ALWAYS_FIRE", "0") == "1"
 
 
 def _union_by_title(*lists: list[dict]) -> list[dict]:

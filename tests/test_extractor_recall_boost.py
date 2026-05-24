@@ -1,9 +1,9 @@
 """Sprint NEXT-14a/b — recall boost (retry union + tail window + ALWAYS_FIRE).
 
 검증 대상:
-- _retries: MV2_EXTRACTOR_GEMMA_RETRIES env (default 2, graceful invalid)
-- _tail_turns: MV2_EXTRACTOR_TAIL_TURNS env (default 80, min 10)
-- _always_fire: MV2_EXTRACTOR_ALWAYS_FIRE env (default off)
+- _retries: MV3_EXTRACTOR_GEMMA_RETRIES env (default 2, graceful invalid)
+- _tail_turns: MV3_EXTRACTOR_TAIL_TURNS env (default 80, min 10)
+- _always_fire: MV3_EXTRACTOR_ALWAYS_FIRE env (default off)
 - _union_by_title: title 기준 dedup + 첫 등장 우선
 - extract_from_jsonl retry: 0건 → retry → hit → union 반환
 - extract_from_jsonl retry exhausted: 모두 0 → 빈 list
@@ -29,51 +29,51 @@ for _mod in ("memory_extractor",):
 class TestEnvHelpers(unittest.TestCase):
     def test_retries_default(self):
         with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("MV2_EXTRACTOR_GEMMA_RETRIES", None)
+            os.environ.pop("MV3_EXTRACTOR_GEMMA_RETRIES", None)
             sys.modules.pop("memory_extractor", None)
             from memory_extractor import _retries
             self.assertEqual(_retries(), 2)
 
     def test_retries_override(self):
-        with patch.dict(os.environ, {"MV2_EXTRACTOR_GEMMA_RETRIES": "5"}):
+        with patch.dict(os.environ, {"MV3_EXTRACTOR_GEMMA_RETRIES": "5"}):
             sys.modules.pop("memory_extractor", None)
             from memory_extractor import _retries
             self.assertEqual(_retries(), 5)
 
     def test_retries_invalid_graceful(self):
-        with patch.dict(os.environ, {"MV2_EXTRACTOR_GEMMA_RETRIES": "garbage"}):
+        with patch.dict(os.environ, {"MV3_EXTRACTOR_GEMMA_RETRIES": "garbage"}):
             sys.modules.pop("memory_extractor", None)
             from memory_extractor import _retries
             self.assertEqual(_retries(), 2)
 
     def test_retries_negative_clamped(self):
-        with patch.dict(os.environ, {"MV2_EXTRACTOR_GEMMA_RETRIES": "-3"}):
+        with patch.dict(os.environ, {"MV3_EXTRACTOR_GEMMA_RETRIES": "-3"}):
             sys.modules.pop("memory_extractor", None)
             from memory_extractor import _retries
             self.assertEqual(_retries(), 0)
 
     def test_tail_turns_default(self):
         with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("MV2_EXTRACTOR_TAIL_TURNS", None)
+            os.environ.pop("MV3_EXTRACTOR_TAIL_TURNS", None)
             sys.modules.pop("memory_extractor", None)
             from memory_extractor import _tail_turns
             self.assertEqual(_tail_turns(), 80)
 
     def test_tail_turns_min_clamped(self):
-        with patch.dict(os.environ, {"MV2_EXTRACTOR_TAIL_TURNS": "3"}):
+        with patch.dict(os.environ, {"MV3_EXTRACTOR_TAIL_TURNS": "3"}):
             sys.modules.pop("memory_extractor", None)
             from memory_extractor import _tail_turns
             self.assertEqual(_tail_turns(), 10)
 
     def test_always_fire_default_off(self):
         with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("MV2_EXTRACTOR_ALWAYS_FIRE", None)
+            os.environ.pop("MV3_EXTRACTOR_ALWAYS_FIRE", None)
             sys.modules.pop("memory_extractor", None)
             from memory_extractor import _always_fire
             self.assertFalse(_always_fire())
 
     def test_always_fire_on(self):
-        with patch.dict(os.environ, {"MV2_EXTRACTOR_ALWAYS_FIRE": "1"}):
+        with patch.dict(os.environ, {"MV3_EXTRACTOR_ALWAYS_FIRE": "1"}):
             sys.modules.pop("memory_extractor", None)
             from memory_extractor import _always_fire
             self.assertTrue(_always_fire())
@@ -144,7 +144,7 @@ class TestExtractRetry(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             jsonl = _make_jsonl(Path(tmp))
-            with patch.dict(os.environ, {"MV2_EXTRACTOR_GEMMA_RETRIES": "2"}):
+            with patch.dict(os.environ, {"MV3_EXTRACTOR_GEMMA_RETRIES": "2"}):
                 sys.modules.pop("memory_extractor", None)
                 import memory_extractor as me
                 with patch.object(me, "call_gemma", side_effect=fake_gemma):
@@ -167,7 +167,7 @@ class TestExtractRetry(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             jsonl = _make_jsonl(Path(tmp))
-            with patch.dict(os.environ, {"MV2_EXTRACTOR_GEMMA_RETRIES": "2"}):
+            with patch.dict(os.environ, {"MV3_EXTRACTOR_GEMMA_RETRIES": "2"}):
                 sys.modules.pop("memory_extractor", None)
                 import memory_extractor as me
                 with patch.object(me, "call_gemma", side_effect=fake_gemma):
@@ -186,7 +186,7 @@ class TestExtractRetry(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             jsonl = _make_jsonl(Path(tmp))
-            with patch.dict(os.environ, {"MV2_EXTRACTOR_GEMMA_RETRIES": "2"}):
+            with patch.dict(os.environ, {"MV3_EXTRACTOR_GEMMA_RETRIES": "2"}):
                 sys.modules.pop("memory_extractor", None)
                 import memory_extractor as me
                 with patch.object(me, "call_gemma", side_effect=fake_gemma):
@@ -203,7 +203,7 @@ class TestExtractRetry(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             jsonl = _make_jsonl(Path(tmp))
-            with patch.dict(os.environ, {"MV2_EXTRACTOR_GEMMA_RETRIES": "0"}):
+            with patch.dict(os.environ, {"MV3_EXTRACTOR_GEMMA_RETRIES": "0"}):
                 sys.modules.pop("memory_extractor", None)
                 import memory_extractor as me
                 with patch.object(me, "call_gemma", side_effect=fake_gemma):
@@ -234,7 +234,7 @@ class TestAlwaysFire(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             jsonl = self._no_trigger_jsonl(Path(tmp))
             with patch.dict(os.environ, {}, clear=False):
-                os.environ.pop("MV2_EXTRACTOR_ALWAYS_FIRE", None)
+                os.environ.pop("MV3_EXTRACTOR_ALWAYS_FIRE", None)
                 sys.modules.pop("memory_extractor", None)
                 import memory_extractor as me
                 with patch.object(me, "call_gemma", side_effect=fake_gemma):
@@ -252,8 +252,8 @@ class TestAlwaysFire(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             jsonl = self._no_trigger_jsonl(Path(tmp))
             with patch.dict(os.environ, {
-                "MV2_EXTRACTOR_ALWAYS_FIRE": "1",
-                "MV2_EXTRACTOR_GEMMA_RETRIES": "0",
+                "MV3_EXTRACTOR_ALWAYS_FIRE": "1",
+                "MV3_EXTRACTOR_GEMMA_RETRIES": "0",
             }):
                 sys.modules.pop("memory_extractor", None)
                 import memory_extractor as me

@@ -28,7 +28,7 @@ Sprint 4 (Layer 4 Memory Recall) 한 세션에 brainstorm → spec → plan → 
   - `tests/test_*.py` 5개 신규 (40+ 단위 테스트, 5 E2E)
   - `docs/superpowers/specs/2026-05-22-sprint4-layer4-recall-design.md`
   - `docs/superpowers/plans/2026-05-22-sprint4-layer4-recall.md`
-  - `~/my-folder/mindvault-v2-sprint4-spec.html`, `~/my-folder/mindvault-v2-sprint4-plan.html` (사람용 dashboards)
+  - `~/my-folder/mindvault-v3-sprint4-spec.html`, `~/my-folder/mindvault-v3-sprint4-plan.html` (사람용 dashboards)
 
 - 배포:
   - `~/Library/LaunchAgents/com.yonghaekim.bge-m3-mlx.plist` (launchctl load)
@@ -93,7 +93,7 @@ Sprint 4 (Layer 4 Memory Recall) 한 세션에 brainstorm → spec → plan → 
 
 ### 무한 재귀 guard
 
-- `MV2_HOOK_RECURSION_GUARD=1` 환경변수 sentinel
+- `MV3_HOOK_RECURSION_GUARD=1` 환경변수 sentinel
 - session_memory.py의 call_gemma → claude -p subprocess 호출 시 env propagate
 - 모든 mv2 hook(session_memory.py, session_memory_end.py, memory-recall.py, async wrapper)이 이 변수 보면 즉시 exit 0
 - inner claude -p 안의 sub-session hook 전부 차단 → 무한 재귀 0
@@ -172,29 +172,29 @@ python3 ~/.claude/scripts/mindvault/recall_cli.py "테스트" --source memory
 python3 -c "import sys; sys.path.insert(0, '/Users/yonghaekim/.claude/scripts/mindvault'); from memory_indexer import full_rebuild; full_rebuild()"
 
 # DB 상태
-python3 -c "import sqlite3; c=sqlite3.connect('/Users/yonghaekim/.claude/mindvault-v2/index.db'); [print(t, c.execute(f'SELECT COUNT(*) FROM {t}').fetchone()[0]) for t in ('sessions','memories','memories_fts','memories_vec')]"
+python3 -c "import sqlite3; c=sqlite3.connect('/Users/yonghaekim/.claude/mindvault-v3/index.db'); [print(t, c.execute(f'SELECT COUNT(*) FROM {t}').fetchone()[0]) for t in ('sessions','memories','memories_fts','memories_vec')]"
 
 # 최근 hook 로그
-tail -30 ~/.claude/mindvault-v2/debug.log | grep -E "hook-recall|mem-search|mem-indexer"
+tail -30 ~/.claude/mindvault-v3/debug.log | grep -E "hook-recall|mem-search|mem-indexer"
 
 # 제거
-bash ~/my-folder/apps/mindvault-v2/uninstall.sh
+bash ~/my-folder/apps/mindvault-v3/uninstall.sh
 # 또는 (memories_* 테이블도 정리)
-bash ~/my-folder/apps/mindvault-v2/uninstall.sh --purge-vec
+bash ~/my-folder/apps/mindvault-v3/uninstall.sh --purge-vec
 ```
 
 ---
 
 ## 파일 위치
 
-- 프로젝트: `~/my-folder/apps/mindvault-v2/`
+- 프로젝트: `~/my-folder/apps/mindvault-v3/`
 - spec/plan: `docs/superpowers/{specs,plans}/2026-05-22-sprint4-*.{md,html은 ~/my-folder/}`
 - 배포본:
   - 훅: `~/.claude/hooks/{session-memory, session-memory-end, memory-recall}.py`
   - 스크립트: `~/.claude/scripts/mindvault/*.py` (10개)
   - 스킬: `~/.claude/commands/{recall, memory_review}.md`
   - 모델: `~/.cache/mlx-bge-m3/` (322MB)
-  - DB: `~/.claude/mindvault-v2/index.db` (17.86MB, schema V2)
+  - DB: `~/.claude/mindvault-v3/index.db` (17.86MB, schema V2)
   - launchd: `~/Library/LaunchAgents/com.yonghaekim.bge-m3-mlx.plist`
   - 로그: `~/Library/Logs/bge-m3-mlx.{log,err}`
 

@@ -53,11 +53,11 @@ class TestHookIO(unittest.TestCase):
 
 
 @unittest.skipIf(
-    os.environ.get("MV2_SKIP_INTEGRATION") == "1",
-    "MV2_SKIP_INTEGRATION=1",
+    os.environ.get("MV3_SKIP_INTEGRATION") == "1",
+    "MV3_SKIP_INTEGRATION=1",
 )
 class TestHookNormalFlow(unittest.TestCase):
-    """실 BGE-M3 + ~/.claude/mindvault-v2/index.db 의존."""
+    """실 BGE-M3 + ~/.claude/mindvault-v3/index.db 의존."""
 
     def test_real_query_format(self):
         r = subprocess.run(

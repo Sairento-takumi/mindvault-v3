@@ -97,14 +97,14 @@ except Exception as e:
 - `indexer.full_rebuild()` 호출 없음.
 - Sprint 10 트랜잭션 패턴 무변경. open_db 만 사용, write 없음.
 - BGE plist / `bge_m3_server.py` 무변경.
-- launchctl 서비스 (`arctic-ko-mlx`, `gemma-mlx`, `mv2-env`) 무관.
+- launchctl 서비스 (`arctic-ko-mlx`, `gemma-mlx`, `mv3-env`) 무관.
 - path traversal 방어 (`_is_within`) — embedding 매칭이 memory_dirs 외 path 가리키면 거부.
 - Sprint 14 의 cmd_diff + cmd_approve `.bak` 백업 안전망 그대로 유지 — embedding 매칭도 동일 flow 거침.
 - worktree `next-2-embed-match` 격리.
 
 ## 미해결 / 다음 #3~#7 후보
 
-- **threshold 실측 튜닝** — 0.75 는 보수치. Memory Compiler ON 상태 (`MV2_AUTO_COMPILE=1`) + 본 휴리스틱 가동 후 며칠 누적, `/memory_review` diff 검토 시 형이 reject 한 update 의 cosine 분포 봐야 적정 임계 결정 가능. self_eval 에 컬럼 추가 후보.
+- **threshold 실측 튜닝** — 0.75 는 보수치. Memory Compiler ON 상태 (`MV3_AUTO_COMPILE=1`) + 본 휴리스틱 가동 후 며칠 누적, `/memory_review` diff 검토 시 형이 reject 한 update 의 cosine 분포 봐야 적정 임계 결정 가능. self_eval 에 컬럼 추가 후보.
 - **title 비어 있고 body 만 있는 경우 동작 확인** — 코드는 `body 만으로 query` 처리하나 운영 candidate 는 거의 title 있음. 가설 검증은 운영 누적 후.
 - **다음 #3 Gemma 보강 classifier** — unknown intent 짧은 query 만 Gemma 호출. 본 sprint 와 무관, 별도 사이클.
 - **#4 type 별 회수 게이트, #5 diff UI 색상, #6 slug conflict, #7 scan latency 캐시** — 형 지시 시 진행.
