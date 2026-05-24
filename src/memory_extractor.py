@@ -346,19 +346,94 @@ def parse_gemma_json(out: str) -> list[dict]:
     return valid
 
 
+def _retries() -> int:
+    """MV2_EXTRACTOR_GEMMA_RETRIES — Gemma candidate 0건일 때 추가 호출 횟수.
+
+    NEXT-15 진단: 같은 input 두 번 호출에서 3건 → 0건 (Gemma 비결정성, temp 0.2).
+    retry + union 으로 hit ratio 끌어올림. 본질적으로 LLM stochasticity 흡수책.
+    default 2 = 최초 1회 + 추가 retry 2회 = 최대 3 호출. latency 부담 vs recall trade-off.
+    """
+    try:
+        return max(0, int(os.environ.get("MV2_EXTRACTOR_GEMMA_RETRIES", "2")))
+    except ValueError:
+        return 2
+
+
+def _tail_turns() -> int:
+    """MV2_EXTRACTOR_TAIL_TURNS — load_tail_messages 가 읽는 마지막 turn 수.
+
+    NEXT-15 진단: trigger 60% miss 의 일부는 tail 40 안에 trigger 패턴이 없어서.
+    window 늘리면 (default 80) Gemma prompt 길어지지만 trigger 와 컨텍스트 모두 풍부.
+    """
+    try:
+        return max(10, int(os.environ.get("MV2_EXTRACTOR_TAIL_TURNS", "80")))
+    except ValueError:
+        return 80
+
+
+def _always_fire() -> bool:
+    """MV2_EXTRACTOR_ALWAYS_FIRE=1 — has_trigger 결과 무시하고 항상 Gemma 호출.
+
+    NEXT-15 진단: trigger 게이트 통과 못 한 세션 60% 가 사실은 영구 기억 가치 있을
+    수 있음. opt-in 으로 게이트 우회. Gemma fire 비용 ↑ but recall 폭 본질 해결.
+    candidates 0 면 부담 거의 없음 (latency 만 1회 추가).
+    """
+    return os.environ.get("MV2_EXTRACTOR_ALWAYS_FIRE", "0") == "1"
+
+
+def _union_by_title(*lists: list[dict]) -> list[dict]:
+    """여러 retry 결과를 title 기준 dedup union. 첫 등장 우선."""
+    seen: set[str] = set()
+    merged: list[dict] = []
+    for lst in lists:
+        for c in lst:
+            t = (c.get("title") or "").strip()
+            if not t or t in seen:
+                continue
+            seen.add(t)
+            merged.append(c)
+    return merged
+
+
 def extract_from_jsonl(jsonl_path: Path) -> list[dict]:
     try:
-        msgs = load_tail_messages(jsonl_path)
+        msgs = load_tail_messages(jsonl_path, tail_turns=_tail_turns())
         if not msgs:
             return []
         if not has_trigger(msgs):
-            _debug(f"no trigger in {jsonl_path.name}, skip")
-            return []
+            if not _always_fire():
+                _debug(f"no trigger in {jsonl_path.name}, skip")
+                return []
+            _debug(f"always-fire bypass for {jsonl_path.name}")
         prompt = build_prompt(msgs)
-        out = call_gemma(prompt)
-        if not out:
-            return []
-        return parse_gemma_json(out)
+        # NEXT-14b: Gemma 멱등성 보강 — 0건이면 retry, union 으로 candidates 모음.
+        # 첫 호출 비-empty 면 즉시 반환 (latency 최소화). 0건일 때만 retry.
+        attempts = 1 + _retries()
+        results: list[list[dict]] = []
+        for i in range(attempts):
+            out = call_gemma(prompt)
+            parsed = parse_gemma_json(out) if out else []
+            results.append(parsed)
+            if parsed:
+                _debug(
+                    f"extract attempt={i + 1}/{attempts} candidates={len(parsed)}"
+                )
+                # 첫 hit 이후엔 한 번 더 시도해 union 으로 recall 보강.
+                # 이미 다음 시도가 cost 보다 가치 큼 (NEXT-15 측정: 같은 input
+                # 도 다른 candidates 추출 — 정보 누적 효과).
+                if i + 1 < attempts and i == 0:
+                    continue
+                break
+            _debug(f"extract attempt={i + 1}/{attempts} candidates=0 (retry)")
+        merged = _union_by_title(*results)
+        if not merged:
+            _debug(f"extract all attempts 0 candidates for {jsonl_path.name}")
+        elif sum(len(r) for r in results) != len(merged):
+            _debug(
+                f"extract union merged={len(merged)} from "
+                f"{[len(r) for r in results]}"
+            )
+        return merged
     except Exception as e:
         _debug(f"extract FATAL: {e}\n{traceback.format_exc()}")
         return []
