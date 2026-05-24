@@ -101,6 +101,77 @@ class TestHookTimeoutPropagation(unittest.TestCase):
         )
 
 
+class TestMtimeThrottle(unittest.TestCase):
+    """NEXT-31 회귀 — SPAWN_LOCK age < SPAWN_THROTTLE_SEC 이면 _mtime_changed 자체 skip.
+
+    _mtime_changed 가 메모리 디렉토리 500+ stat 을 도는데 reindex 가 직전에
+    spawn 됐다면 어차피 throttle 로 skip 되므로 mtime check 자체가 낭비.
+    """
+
+    def _load_hook_module(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("hk", str(HOOK))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_recent_spawn_lock_skips_mtime_check(self):
+        import io
+        import tempfile
+        import time as _time
+        from unittest.mock import patch
+
+        hk = self._load_hook_module()
+        mtime_calls = []
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = Path(tmp) / "reindex-spawn.lock"
+            lock.touch()  # 방금 spawn 한 것처럼
+            with patch.object(hk, "SPAWN_LOCK", lock), patch.object(
+                hk, "_mtime_changed",
+                side_effect=lambda: (mtime_calls.append(_time.time()) or False),
+            ), patch.object(
+                hk, "_spawn_reindex", side_effect=lambda: None,
+            ), patch.object(
+                sys, "stdin",
+                io.StringIO(json.dumps({"prompt": "충분히 긴 query — mtime throttle skip 검증"})),
+            ):
+                hk.main()
+        self.assertEqual(
+            len(mtime_calls), 0,
+            f"_mtime_changed 가 호출됨 (skip 안됨): {mtime_calls}",
+        )
+
+    def test_stale_spawn_lock_invokes_mtime_check(self):
+        import io
+        import os as _os
+        import tempfile
+        import time as _time
+        from unittest.mock import patch
+
+        hk = self._load_hook_module()
+        mtime_calls = []
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = Path(tmp) / "reindex-spawn.lock"
+            lock.touch()
+            # SPAWN_THROTTLE_SEC 초과 시점으로 lock 의 mtime 백포팅
+            past = _time.time() - (hk.SPAWN_THROTTLE_SEC + 60)
+            _os.utime(lock, (past, past))
+            with patch.object(hk, "SPAWN_LOCK", lock), patch.object(
+                hk, "_mtime_changed",
+                side_effect=lambda: (mtime_calls.append(_time.time()) or False),
+            ), patch.object(
+                hk, "_spawn_reindex", side_effect=lambda: None,
+            ), patch.object(
+                sys, "stdin",
+                io.StringIO(json.dumps({"prompt": "충분히 긴 query — stale lock 시 mtime check 발동"})),
+            ):
+                hk.main()
+        self.assertEqual(
+            len(mtime_calls), 1,
+            f"stale lock 임에도 _mtime_changed 호출 안됨: {mtime_calls}",
+        )
+
+
 @unittest.skipIf(
     os.environ.get("MV3_SKIP_INTEGRATION") == "1",
     "MV3_SKIP_INTEGRATION=1",

@@ -268,7 +268,18 @@ def main() -> int:
         if len(prompt) < MIN_PROMPT_LEN:
             return 0
 
-        if _mtime_changed():
+        # NEXT-31 (2026-05-24): _mtime_changed() 자체가 500+ stat 호출 (메모리
+        # 디렉토리 5×100건 + _procedural). SPAWN_LOCK age 가 SPAWN_THROTTLE_SEC
+        # 이내라면 이미 reindex spawn 직후라 어차피 throttle 로 skip 되므로
+        # mtime check 자체를 건너뛰어 hot-path latency 절약 (~5-30ms).
+        _skip_mtime = False
+        try:
+            if SPAWN_LOCK.exists():
+                if (time.time() - SPAWN_LOCK.stat().st_mtime) < SPAWN_THROTTLE_SEC:
+                    _skip_mtime = True
+        except OSError:
+            pass
+        if not _skip_mtime and _mtime_changed():
             _spawn_reindex()
 
         for d in SCRIPTS_DIRS:

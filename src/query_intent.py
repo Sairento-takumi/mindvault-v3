@@ -32,7 +32,12 @@ from typing import NamedTuple
 # 짧은 query 에 한해 Gemma 가 chat/meta 분류 보강. opt-in 환경변수로 default off.
 GEMMA_INTENT_URL = "http://localhost:8080/v1/chat/completions"
 GEMMA_INTENT_MODEL = "mlx-community/gemma-4-e4b-it-4bit"
-GEMMA_INTENT_TIMEOUT = 2.0
+# Hook hard-budget (hooks/memory-recall.py HARD_TIMEOUT_MS=400) 기준으로
+# 산정. 실측: warm 247ms / cold 558ms (2026-05-24). 2.0s → 0.30s 로 단축해
+# cold 는 즉시 silent skip(None) → rule-based fallback, warm 만 통과.
+# 이전 2.0s 때엔 cold 호출 1건이 hook SIGALRM 400ms 에 잡혀 debug.log 에
+# "intent classify skipped: _Timeout" 60건 누적 (13:45~20:17 burst).
+GEMMA_INTENT_TIMEOUT = 0.30
 GEMMA_INTENT_MAX_LEN = 40  # 그 이상 query 는 Gemma 호출 안 함 (cost / latency)
 ENABLE_GEMMA_INTENT_ENV = "MV3_GEMMA_INTENT"
 
