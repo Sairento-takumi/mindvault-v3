@@ -6,6 +6,32 @@
 """
 from __future__ import annotations
 
+import os as _os_bootstrap
+import sys as _sys_bootstrap
+
+# numpy/sqlite_vec 보유한 python interpreter로 자동 재실행 (NEXT-26).
+# launchd/Claude hook 컨텍스트에서 PATH가 numpy 없는 /usr/bin/python3 를 잡아
+# "numpy._core.multiarray failed to import" FATAL 폭주하던 회귀 차단.
+if "MV3_HOOK_REEXEC" not in _os_bootstrap.environ:
+    try:
+        import numpy as _probe_numpy  # noqa: F401
+    except ImportError:
+        for _cand in (
+            "/Library/Frameworks/Python.framework/Versions/3.10/bin/python3",
+            "/Library/Frameworks/Python.framework/Versions/3.11/bin/python3",
+            "/Library/Frameworks/Python.framework/Versions/3.12/bin/python3",
+            "/opt/homebrew/bin/python3",
+            "/usr/local/bin/python3",
+        ):
+            if _os_bootstrap.path.exists(_cand) and _os_bootstrap.path.realpath(_cand) != _os_bootstrap.path.realpath(_sys_bootstrap.executable):
+                _os_bootstrap.environ["MV3_HOOK_REEXEC"] = "1"
+                try:
+                    _os_bootstrap.execv(_cand, [_cand, __file__] + _sys_bootstrap.argv[1:])
+                except OSError:
+                    continue
+        # 못 찾으면 silent exit — hook은 절대 블로킹 금지
+        _sys_bootstrap.exit(0)
+
 import json
 import signal
 import subprocess

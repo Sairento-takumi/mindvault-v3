@@ -2,7 +2,7 @@
 
 > Claude Code의 영구 기억 시스템. 4-layer 파이프라인으로 세션 요약 자동 주입 · 자연어 검색 · Memory Compiler · 자동 회수까지.
 
-**v3.0.0** · Karpathy LLM-as-Compiler 패턴 실증 · macOS · MIT license · 296 tests passed
+**v3.0.0** · Karpathy LLM-as-Compiler 패턴 실증 · macOS · MIT license · 295 passed / 1 perf-fail
 
 ---
 
@@ -63,7 +63,9 @@ MindVault v3는 그 망각의 빈 자리를 세 축으로 메웁니다:
 | NEXT-8 | PROJECTS_ROOT fix (dogfooding gap 해소, LLM-as-Compiler 첫 실증) | ✅ |
 | NEXT-10~20 | ACK trigger · backfill · always-fire · cache · stats CLI · launchd 영구화 | ✅ |
 
-**실측 (v3.0.0)**: 296 tests passed, false positive 0.0%, internal effort 0.60, hook hit rate ~79% (classifier 후 66.5%), 자기충족 메모리 탐지 8건, extractor nonzero rate 20% → 47%.
+**실측 (v3.0.0, 2026-05-24)**: **295 passed / 1 failed** (`test_e2e_4_hook_performance` perf 회귀: avg 452ms > 목표 150ms). false positive 0.0%, internal effort 0.60, **hook 실효 hit rate 2.6%** (debug.log 1,315회 중 picked>0=34). 자기충족 메모리 탐지 8건, extractor nonzero rate 20% → 47%.
+
+> 옛 표기 "296 passed / hit rate ~79%"는 sprint 6 BGE-M3 시점 측정이며, Arctic-ko 4bit 전환 후 회귀했습니다. Post-ship fix 진행 중 — `BUILD-LOG.md` 의 `NEXT-26` 이후 참고.
 
 ## 요구사항
 
@@ -134,7 +136,7 @@ SessionEnd마다 Gemma가 자동 추출한 메모리 후보는 `memory/_procedur
 
 UserPromptSubmit hook이 매 메시지마다 hybrid 검색을 돌립니다. 관련 메모리는 `<system-reminder>` 태그로 Claude의 컨텍스트에 자동 주입되며, 사용자가 명령을 내릴 필요가 없습니다.
 
-raw cosine 게이트 (default 0.79, 회수 단서어 시 0.76 완화) + query intent classifier (chat/meta/code/recall/unknown) 가 잡담 쿼리에서 무관 메모리 끼는 false positive를 차단합니다.
+raw cosine 게이트 (Arctic-ko 기준 default 0.40, 회수 단서어 시 0.32 완화) + query intent classifier (chat/meta/code/recall/unknown) 가 잡담 쿼리에서 무관 메모리 끼는 false positive를 차단합니다. 임계값은 `hooks/memory-recall.py` 의 `RAW_COSINE_MIN_*` 상수이며 v3.0.0 ship 시점에 정의되어 있습니다.
 
 ## 자기-수정 메커니즘
 
@@ -176,7 +178,7 @@ raw cosine 게이트 (default 0.79, 회수 단서어 시 0.76 완화) + query in
 pytest tests/
 ```
 
-296 tests passed, test isolation 0 fail. 네트워크/Gemma 불필요 (mocked).
+295 passed / 1 failed (perf only). functional 295건 전부 OK, e2e perf 회귀(`test_e2e_4_hook_performance` avg 452ms > 150ms)만 미해결. 네트워크/Gemma 불필요 (mocked).
 
 ## 제거
 
