@@ -1,21 +1,31 @@
-"""NEXT-31 alias generator — Gemma 1회성 batch로 각 메모리의 짧은 한국어 별칭 추출.
+"""NEXT-31/33 alias generator — 1회성 batch로 각 메모리의 짧은 한국어 별칭 추출.
 
 목적: hook 실시간 query rewriting 은 latency 800~3000ms 로 불가능했음 (NEXT-30.4
 보류 사유). 대안으로 SessionEnd 직후 또는 수동 trigger 로 메모리당 5개 alias 를
 미리 생성해 ~/.claude/mindvault-v3/alias_index.json 에 캐시 → memory_search.py
 가 검색 시 latency 0 으로 lookup.
 
+Provider:
+- gemma  : 로컬 MLX 서버 (http://localhost:8080). 비용 0. alias 품질 보통
+           (description 단어 그대로 쓰는 경향).
+- claude : `claude` CLI subprocess 호출 (NEXT-33, 2026-05-24). MindVault 는
+           Claude Code CLI 환경에서만 도는 도구라 사용자 인증은 이미 OAuth
+           (Max/Pro 구독) 로 끝난 상태 — ANTHROPIC_API_KEY 요구 X. 구독 한도
+           안에서 처리. alias 품질 우수 (description 우회 표현 등장).
+
 활용: query 토큰들 중 어떤 메모리의 alias 와 매칭되면 해당 메모리 경로를
 candidates 에 강제 추가 + score boost. 임베딩이 약한 케이스 ("프린터로" →
 scanner-cli, "브이3" → project-mindvault) 회복용.
 
 CLI:
-    python -m alias_generator [--force] [--limit N]
+    python -m alias_generator [--provider {gemma,claude}] [--model {sonnet,haiku}]
+                              [--force] [--limit N]
 """
 from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 import time
 import urllib.error
@@ -29,6 +39,32 @@ DEBUG_LOG = DATA_DIR / "debug.log"
 GEMMA_URL = "http://localhost:8080/v1/chat/completions"
 GEMMA_MODEL = "mlx-community/gemma-4-e4b-it-4bit"
 GEMMA_TIMEOUT = 30  # SessionEnd batch context — 여유
+
+# NEXT-33: claude CLI 호출 시 schema 검증. structured_output 필드로 응답.
+CLAUDE_TIMEOUT = 120  # cold start 첫 호출 15~30s, warm 15~25s. 여유 두기.
+CLAUDE_SYSTEM_PROMPT = (
+    "입력으로 한 메모리의 description + 본문 일부를 받는다. "
+    "사용자가 그 메모리를 회수하려 할 때 입에서 나올 만한 한국어 우회 표현 5개를 alias 로 출력하라.\n"
+    "규칙:\n"
+    "- description / name 단어를 그대로 쓰지 말 것 (가장 중요)\n"
+    "- 사용자 입에서 나올 법한 우회 표현·동의어·외래어·축약형·은어 위주\n"
+    "- 각 alias 는 1~3 단어\n"
+    "- 영문/숫자 약어가 사용자가 실제 쓸 만한 경우 포함 (\"v3\", \"msmtp\", \"Docker\" 등)\n"
+    "- 잡담·맞장구·일반 명사 (\"도구\", \"시스템\", \"방법\", \"그거\") 절대 금지"
+)
+CLAUDE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "aliases": {
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": 5,
+            "maxItems": 5,
+        }
+    },
+    "required": ["aliases"],
+    "additionalProperties": False,
+}
 
 MEMORY_DIRS = [
     Path("~/.claude/projects/-Users-yonghaekim/memory").expanduser(),
@@ -93,6 +129,69 @@ def _call_gemma(desc: str, body: str) -> list[str]:
     return _parse_aliases(text)
 
 
+def _call_claude(desc: str, body: str, model: str = "sonnet") -> list[str]:
+    """NEXT-33 — claude CLI subprocess 호출.
+
+    MindVault 는 Claude Code CLI 환경 도구라 사용자는 이미 OAuth (Max/Pro 구독)
+    인증 끝난 상태. ANTHROPIC_API_KEY 요구하지 않음 — `claude` CLI 가 알아서
+    OAuth 활용 → 구독 한도 안에서 처리. `--bare` 는 OAuth 안 읽으므로 X.
+
+    --tools "" + --disable-slash-commands + --no-session-persistence 로 부작용
+    최소화. --output-format json 의 응답 envelope 의 structured_output 필드에
+    schema 매칭 결과가 들어옴.
+
+    model: "sonnet" (claude-sonnet-4-6), "haiku" (claude-haiku-4-5)
+    """
+    user_prompt = f"description: {desc[:300]}\n\n본문 일부:\n{body[:1500]}"
+    cmd = [
+        "claude", "-p", user_prompt,
+        "--model", model,
+        "--system-prompt", CLAUDE_SYSTEM_PROMPT,
+        "--output-format", "json",
+        "--json-schema", json.dumps(CLAUDE_SCHEMA),
+        "--tools", "",
+        "--disable-slash-commands",
+        "--no-session-persistence",
+    ]
+    try:
+        r = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=CLAUDE_TIMEOUT,
+            stdin=subprocess.DEVNULL,  # "no stdin" 경고 차단
+        )
+    except subprocess.TimeoutExpired:
+        _debug(f"claude call timeout (>{CLAUDE_TIMEOUT}s)")
+        return []
+    except OSError as e:
+        _debug(f"claude call OSError: {e}")
+        return []
+    if r.returncode != 0:
+        _debug(f"claude exit={r.returncode} stderr={r.stderr[-200:]!r}")
+        return []
+    try:
+        env = json.loads(r.stdout)
+    except json.JSONDecodeError as e:
+        _debug(f"claude stdout JSONDecodeError: {e}")
+        return []
+    if env.get("is_error"):
+        _debug(f"claude is_error: {env.get('result','')[:200]}")
+        return []
+    structured = env.get("structured_output") or {}
+    aliases = structured.get("aliases") or []
+    # claude CLI 는 schema minItems=5 검증을 통과한 결과만 반환하지만, 환경 변동
+    # (rate limit / fallback) 으로 빈 응답 올 수 있으니 방어적으로 정리.
+    cleaned: list[str] = []
+    for a in aliases:
+        a = str(a).strip().strip("\"'`")
+        if a and len(a) <= 30:
+            cleaned.append(a)
+        if len(cleaned) >= 5:
+            break
+    return cleaned
+
+
 def _parse_aliases(text: str) -> list[str]:
     """5줄 alias 추출 — 잡음·번호·따옴표 정리."""
     out: list[str] = []
@@ -144,11 +243,18 @@ def _extract_memory_meta(md_path: Path) -> tuple[str, str, str] | None:
     return name, desc, body
 
 
-def generate(force: bool = False, limit: int | None = None) -> dict:
+def generate(
+    force: bool = False,
+    limit: int | None = None,
+    provider: str = "gemma",
+    model: str = "sonnet",
+) -> dict:
     """모든 메모리 .md → alias_index.json 갱신.
 
-    force=False 면 이미 index 에 있는 path 는 skip (incremental). True 면 전건 재생성.
-    반환: stats.
+    provider: "gemma" (로컬 MLX, 비용 0, 품질 보통)
+              "claude" (claude CLI subprocess, OAuth 인증 자동 활용, 품질 우수)
+    model:    provider="claude" 일 때 "sonnet" | "haiku"
+    force=False 면 이미 index 에 있는 path 는 skip (incremental).
     """
     existing: dict[str, dict] = {}
     if INDEX_PATH.exists() and not force:
@@ -174,7 +280,14 @@ def generate(force: bool = False, limit: int | None = None) -> dict:
     if limit is not None:
         targets = targets[:limit]
 
-    stats = {"total": len(targets), "generated": 0, "skipped": 0, "failed": 0}
+    stats = {
+        "total": len(targets),
+        "generated": 0,
+        "skipped": 0,
+        "failed": 0,
+        "provider": provider,
+        "model": model if provider == "claude" else None,
+    }
     t0 = time.time()
     for i, md in enumerate(targets):
         path_key = str(md)
@@ -186,18 +299,22 @@ def generate(force: bool = False, limit: int | None = None) -> dict:
             stats["failed"] += 1
             continue
         name, desc, body = meta
-        aliases = _call_gemma(desc, body)
+        if provider == "claude":
+            aliases = _call_claude(desc, body, model=model)
+        else:
+            aliases = _call_gemma(desc, body)
         if not aliases:
             stats["failed"] += 1
-            _debug(f"no aliases: {name}")
+            _debug(f"no aliases ({provider}): {name}")
             continue
         existing[path_key] = {
             "name": name,
             "aliases": aliases,
+            "provider": provider,
             "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         }
         stats["generated"] += 1
-        # 매 10건마다 중간 저장 — Gemma 도중 실패해도 진행 보존
+        # 매 10건마다 중간 저장 — 도중 실패해도 진행 보존
         if stats["generated"] % 10 == 0:
             _save(existing)
             print(f"  [{i+1}/{len(targets)}] {stats['generated']} ok ({(time.time()-t0):.0f}s)")
@@ -223,11 +340,30 @@ def load_alias_index() -> dict:
 
 def main() -> int:
     p = argparse.ArgumentParser()
+    p.add_argument(
+        "--provider",
+        choices=["gemma", "claude"],
+        default="gemma",
+        help="alias 생성 provider. gemma=로컬 MLX (비용 0, 품질 보통). "
+             "claude=`claude` CLI subprocess (OAuth 인증 자동, 구독 한도 안에서 처리, 품질 우수)",
+    )
+    p.add_argument(
+        "--model",
+        choices=["sonnet", "haiku"],
+        default="sonnet",
+        help="--provider claude 일 때 모델 선택. default=sonnet (claude-sonnet-4-6)",
+    )
     p.add_argument("--force", action="store_true", help="기존 alias_index 전건 재생성")
     p.add_argument("--limit", type=int, default=None, help="최대 N건만 처리 (디버그)")
     args = p.parse_args()
-    s = generate(force=args.force, limit=args.limit)
+    s = generate(
+        force=args.force,
+        limit=args.limit,
+        provider=args.provider,
+        model=args.model,
+    )
     print(f"\nalias_index → {INDEX_PATH}")
+    print(f"  provider={s['provider']}" + (f" model={s['model']}" if s['model'] else ""))
     print(f"  total={s['total']} generated={s['generated']} skipped={s['skipped']} failed={s['failed']} elapsed={s['elapsed_s']}s")
     return 0
 
