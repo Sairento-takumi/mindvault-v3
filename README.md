@@ -2,7 +2,7 @@
 
 > Claude Code의 영구 기억 시스템. 4-layer 파이프라인으로 세션 요약 자동 주입 · 자연어 검색 · Memory Compiler · 자동 회수까지.
 
-**v3.1.3** · Karpathy LLM-as-Compiler 패턴 실증 · macOS · MIT license · 340 passed
+**v3.2.0** · Karpathy LLM-as-Compiler 패턴 실증 · macOS (Apple Silicon) · MIT license · 360 passed
 
 ---
 
@@ -63,26 +63,26 @@ MindVault v3는 그 망각의 빈 자리를 세 축으로 메웁니다:
 | NEXT-8 | PROJECTS_ROOT fix (dogfooding gap 해소, LLM-as-Compiler 첫 실증) | ✅ |
 | NEXT-10~20 | ACK trigger · backfill · always-fire · cache · stats CLI · launchd 영구화 | ✅ |
 
-**실측 (v3.1.2/v3.1.3 carry-forward, 2026-05-25 재측)**: **340 passed + 13 subtests** (회귀 0). false positive 0.0%, internal effort 0.60, **hook 실효 hit rate picked>0 = 66.3%** (n=3,193, 2026-05-23~25). 자기충족 메모리 탐지 8건, extractor nonzero rate 20% → 47%. v3.1.3 fix 는 본문 안내·robustness 만이라 측정 그대로 적용.
+**실측 (v3.2.0, 2026-05-25)**: **360 passed + 13 subtests** (v3.1.3 의 340 → 360, 신규 zero-touch install 테스트 20건 추가, 회귀 0). false positive 0.0%, internal effort 0.60, **hook 실효 hit rate picked>0 = 66.3%** (n=3,193, 2026-05-23~25 carry-forward — hook 로직 변경 없음). 자기충족 메모리 탐지 8건, extractor nonzero rate 20% → 47%. v3.2.0 변경은 install.sh / uninstall.sh / 신규 plist·runner·convert 헬퍼만이라 측정 그대로 적용.
 
 **Latency** (n=3,193): **p50=40ms, p95=400ms, p99=471ms**. timeout(≥400ms) skip ~6%. v3.0.x post-ship perf 회귀 (avg 452ms) 는 해소 (NEXT-27/28 fix + alias_index/intent cache 운영 누적).
 
 > 옛 표기 추적:
-> - "295 passed" (v3.0.0) → "307" (v3.0.1) → "311" (v3.0.2) → "327" (v3.1.0) → "340" (v3.1.1/v3.1.2/v3.1.3)
+> - "295 passed" (v3.0.0) → "307" (v3.0.1) → "311" (v3.0.2) → "327" (v3.1.0) → "340" (v3.1.1/v3.1.2/v3.1.3) → **"360" (v3.2.0)**
 > - "hit rate 2.6%" (measurement artifact) → "55.7%" (v3.0.2 audit 시점) → **"66.3%"** (현재)
 > - "avg 452ms" (NEXT-27 이전) → **"p50=40ms"** (현재)
+> - "Gemma 수동 사전 설치" (v3.0~v3.1.3) → **"install.sh 자동" (v3.2.0)**
+> - "Arctic-ko 모델 수동 변환" (v3.0~v3.1.3) → **"install.sh 자동 변환" (v3.2.0)**
 
 ## 요구사항
 
-- **macOS** (Linux 미검증)
+- **macOS (Apple Silicon, M1+)** — MLX 백엔드 의존. Intel Mac / Linux 는 v3.3.0 (백엔드 추상화) 이후 지원 예정
 - **Python 3.10+**
 - **Claude Code** (hook 등록을 위해)
-- **로컬 Gemma MLX 서버** — `http://localhost:8080`
-  - 권장 launchd 서비스: `com.<author>.gemma-mlx`
-  - 모델: `mlx-community/gemma-4-e4b-it-4bit`
-- **로컬 Arctic-ko MLX 서버** — `http://localhost:8081` (install.sh가 자동 설치)
-  - 모델: `dragonkue/snowflake-arctic-embed-l-v2.0-ko` 의 MLX 4bit 양자화본 (`~/.cache/mlx-arctic-ko/`)
-  - **수동 변환 1회 필요** — 아래 "Arctic-ko 모델 변환" 참조
+- **로컬 Gemma MLX 서버** — `install.sh` 가 자동 설치 (`com.mindvault.gemma-mlx`, port 8080, ~3GB)
+  - 이미 다른 이름 (예: `com.<user>.gemma-mlx`) 으로 띄워둔 사용자는 자동 감지·재사용
+- **로컬 Arctic-ko MLX 서버** — `install.sh` 가 자동 설치 (port 8081, ~322MB 4bit 양자화 자동 변환)
+  - 원본 모델: `dragonkue/snowflake-arctic-embed-l-v2.0-ko`
 
 ## 설치
 
@@ -95,24 +95,18 @@ cd mindvault-v3
 설치 내용:
 - `~/.claude/hooks/` 에 hook 스크립트들 복사
 - `~/.claude/scripts/mindvault/` 에 인덱서/검색 모듈 배포
-- `~/.claude/commands/` 에 `/recall`, `/memory_review` 스킬 등록
+- `~/.claude/commands/` 에 `/recall`, `/memory_review`, `/close-session`, `/cs` 스킬 등록
 - `~/.claude/settings.json` 의 hook 배열에 등록 (`.bak` 자동 백업)
 - Arctic-ko launchd 서비스 등록 (사용자별 `$HOME` 자동 치환)
+- **(v3.2.0) Sprint 4.5 — Arctic-ko 4bit 모델 자동 변환** (원본 ~1.1GB DL + ~322MB 4bit 양자화)
+- **(v3.2.0) Sprint 17 — Gemma 자동 설치** (`mlx-lm` pip + 모델 ~3GB DL + launchd `com.mindvault.gemma-mlx`)
+- **(v3.2.0) Apple Silicon 가드** — 비 arm64 환경에서는 인프라만 설치 (모델 자동 설치 skip)
+- **(v3.2.0) Resumable checkpoint** — 중간 실패 시 step 파일 (`~/.cache/{mv3-gemma,mlx-arctic-ko}/.mv3-step`) 기반으로 재실행 시 이어감
 - 초기 인덱싱 1회 실행
 
+첫 실행 소요: **8~12분** (모델 DL/변환). 재실행은 idempotent — 이미 있는 자산 자동 skip.
+
 설치 확인: 새 `claude` 세션을 열면 system-reminder에 `# 지난 세션 요약 (MindVault v3)` 블록이 나타납니다.
-
-### Arctic-ko 모델 변환 (1회만 필요)
-
-`install.sh` 가 launchd plist + 서버 스크립트 + 인덱스는 자동 배포하지만, MLX 4bit 양자화 모델 자체는 사용자가 직접 변환해야 합니다 (mlx-community에 4bit 양자화본이 아직 없음).
-
-```bash
-pip install --user mlx_embeddings huggingface_hub
-python3 -c "from mlx_embeddings.utils import convert; convert('dragonkue/snowflake-arctic-embed-l-v2.0-ko', mlx_path='$HOME/.cache/mlx-arctic-ko', quantize=True, q_bits=4)"
-./install.sh   # 재실행 (모델 인식 후 서비스 기동)
-```
-
-모델 ~1.1GB 다운로드 후 ~322MB 4bit 양자화, 총 1~2분. 결과는 `~/.cache/mlx-arctic-ko/`에 영구 저장.
 
 ## 사용
 
@@ -206,6 +200,7 @@ rm -rf ~/.cache/mlx-arctic-ko
 3. **PII 필터는 키 패턴만** — 이메일/전화는 로컬 전용이라 통과
 4. **세션 경계 = JSONL 파일** — 한 파일 안에서 주제 바뀌어도 하나로 간주
 5. **macOS 전용** — launchd 의존 (Linux는 systemd 변환 필요)
+6. **Apple Silicon 전용** (v3.2.0~) — MLX 백엔드 (`mlx-lm`, `mlx-embeddings`) 가 Apple Silicon 만 지원. Intel Mac / Linux / Windows 에서 사용하려면 v3.3.0 (백엔드 추상화: ollama / OpenAI / 자체 endpoint) 이후 가능
 
 ## 디버깅
 
