@@ -233,6 +233,22 @@ def main() -> int:
             candidates, slugs, sid, write_staged
         )
         _debug(f"session {sid[:8]}: staged {written}/{len(candidates)}")
+
+        # NEXT-34 (2026-05-25): alias_index 자동 동기화. SessionEnd 가 이미
+        # nohup detach 컨텍스트라 추가 비용 OK. Gemma 호출은 incremental —
+        # 새 메모리 파일이 없으면 거의 즉시 끝. purge_missing 으로 삭제된
+        # 메모리 dangling entry 도 함께 청소. 실패는 silent (recall hot
+        # path 와 무관, 다음 SessionEnd 에서 재시도 가능).
+        try:
+            from alias_generator import generate as _alias_generate
+            stats = _alias_generate(purge_missing=True)
+            _debug(
+                f"alias_sync generated={stats.get('generated', 0)} "
+                f"purged={stats.get('purged', 0)} "
+                f"failed={stats.get('failed', 0)}"
+            )
+        except Exception as e:
+            _debug(f"alias_sync skipped: {type(e).__name__}: {e}")
         return 0
     except Exception as e:
         _debug(f"FATAL {e}\n{traceback.format_exc()}")

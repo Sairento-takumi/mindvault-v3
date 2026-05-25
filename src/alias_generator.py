@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -248,6 +249,7 @@ def generate(
     limit: int | None = None,
     provider: str = "gemma",
     model: str = "sonnet",
+    purge_missing: bool = False,
 ) -> dict:
     """모든 메모리 .md → alias_index.json 갱신.
 
@@ -255,6 +257,8 @@ def generate(
               "claude" (claude CLI subprocess, OAuth 인증 자동 활용, 품질 우수)
     model:    provider="claude" 일 때 "sonnet" | "haiku"
     force=False 면 이미 index 에 있는 path 는 skip (incremental).
+    purge_missing=True 면 alias_index 안에서 디스크에 없는 path entry 를 제거 —
+    SessionEnd 자동 동기화에서 dangling reference 누적 방지.
     """
     existing: dict[str, dict] = {}
     if INDEX_PATH.exists() and not force:
@@ -270,21 +274,39 @@ def generate(
         for md in sorted(d.glob("*.md")):
             if md.name == "MEMORY.md":
                 continue
+            # NEXT-34 #5 (2026-05-25): _staged 직속 파일도 명시 제외 (review 전
+            # 메모리가 alias_index → recall 에 노출되는 leak 방지).
+            if any(part == "_staged" for part in md.parts):
+                continue
             targets.append(md)
-        # _procedural/ 하위도 포함
+        # _procedural/ 하위도 포함 (단, _procedural/_staged/ 는 제외).
         proc = d / "_procedural"
         if proc.is_dir():
             for md in sorted(proc.glob("*.md")):
+                if any(part == "_staged" for part in md.parts):
+                    continue
                 targets.append(md)
 
     if limit is not None:
         targets = targets[:limit]
+
+    purged = 0
+    if purge_missing and existing:
+        target_keys = {str(p) for p in targets}
+        for k in list(existing.keys()):
+            # 명시 제외 path (_staged, MEMORY.md 등) 도 alias_index 에서 함께 청소.
+            kp = Path(k)
+            is_excluded = any(part == "_staged" for part in kp.parts) or kp.name == "MEMORY.md"
+            if k not in target_keys and (is_excluded or not kp.exists()):
+                del existing[k]
+                purged += 1
 
     stats = {
         "total": len(targets),
         "generated": 0,
         "skipped": 0,
         "failed": 0,
+        "purged": purged,
         "provider": provider,
         "model": model if provider == "claude" else None,
     }
@@ -324,8 +346,16 @@ def generate(
 
 
 def _save(data: dict) -> None:
+    """alias_index.json atomic write — tmp + os.replace() 로 partial write 차단.
+
+    recall hook 의 load_alias_index() 가 동기적으로 읽는 도중 generate() 가
+    write_text 중간에 crash 하면 부분 쓰인 파일이 JSONDecodeError 를 일으켜
+    다음 SessionEnd 까지 alias boost 비활성. tmp 에 쓰고 atomic rename.
+    """
     INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
-    INDEX_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+    tmp = INDEX_PATH.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+    os.replace(tmp, INDEX_PATH)
 
 
 def load_alias_index() -> dict:
@@ -355,16 +385,32 @@ def main() -> int:
     )
     p.add_argument("--force", action="store_true", help="기존 alias_index 전건 재생성")
     p.add_argument("--limit", type=int, default=None, help="최대 N건만 처리 (디버그)")
+    p.add_argument(
+        "--purge-missing",
+        action="store_true",
+        help="alias_index 안에서 디스크에 없는 path entry 제거 (dangling 정리)",
+    )
+    p.add_argument(
+        "--sync",
+        action="store_true",
+        help="SessionEnd 자동 호출용 shortcut: --purge-missing 켠 incremental 동기화",
+    )
     args = p.parse_args()
+    if args.sync:
+        args.purge_missing = True
     s = generate(
         force=args.force,
         limit=args.limit,
         provider=args.provider,
         model=args.model,
+        purge_missing=args.purge_missing,
     )
     print(f"\nalias_index → {INDEX_PATH}")
     print(f"  provider={s['provider']}" + (f" model={s['model']}" if s['model'] else ""))
-    print(f"  total={s['total']} generated={s['generated']} skipped={s['skipped']} failed={s['failed']} elapsed={s['elapsed_s']}s")
+    print(
+        f"  total={s['total']} generated={s['generated']} skipped={s['skipped']} "
+        f"failed={s['failed']} purged={s.get('purged', 0)} elapsed={s['elapsed_s']}s"
+    )
     return 0
 
 

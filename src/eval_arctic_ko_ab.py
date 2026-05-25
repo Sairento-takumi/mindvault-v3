@@ -1,10 +1,23 @@
 #!/usr/bin/env python3
-"""Sprint 9 — BGE-M3(8081) vs Arctic-ko(8082) A/B raw cosine 분포 비교.
+"""Sprint 9 — BGE-M3 vs Arctic-ko A/B raw cosine 분포 비교 [HISTORICAL].
+
+⚠️  [DEPRECATED — historical reference] Sprint 14 에서 Arctic-ko 정식 채택 후
+    BGE-M3 launchd 서비스 (com.mindvault.bge-m3) 는 제거. 현재 8081 포트는
+    Arctic-ko 가 사용. 본 스크립트는 옛 측정 환경 재현 용이라 둘 다 살아있어야
+    의미 있음. 그대로 돌리면 BGE_M3_URL=8081 이 사실은 Arctic-ko 를 부르고,
+    ARCTIC_KO_URL=8082 는 connection refused → false comparison.
+
+사용하려면:
+1. scripts/bge_m3_server.py 를 별도 포트 (예: 18081) 로 수동 spin-up
+2. 환경변수 override:
+       MV3_EVAL_BGE_M3_URL=http://localhost:18081/embed \\
+       MV3_EVAL_ARCTIC_KO_URL=http://localhost:8081/embed \\
+       python3 src/eval_arctic_ko_ab.py
 
 eval_top3_domain.py의 RELEVANT_QUERIES 10개 + 잡담 NOISE 10개를
 두 서버에 각각 보내, 동일 memory/*.md 코퍼스에 대한 raw cosine 분포 차이 측정.
 
-목표:
+목표 (당시):
 - 도메인 쿼리 top1 cosine: BGE-M3 0.77~0.83 → Arctic-ko 어떻게 이동?
 - 잡담 쿼리 top1 cosine: BGE-M3 0.65~0.75 → Arctic-ko 분리되는가?
 - 두 분포 사이 gap이 벌어지면 새 cosine 게이트 후보 도출
@@ -15,6 +28,7 @@ eval_top3_domain.py의 RELEVANT_QUERIES 10개 + 잡담 NOISE 10개를
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 import urllib.request
@@ -32,8 +46,9 @@ def _discover_memory_dirs() -> list[Path]:
 
 MEMORY_DIRS = _discover_memory_dirs()
 
-BGE_M3_URL = "http://localhost:8081/embed"
-ARCTIC_KO_URL = "http://localhost:8082/embed"
+# 환경변수 override 가능 — Sprint 14 이후 두 서버 동시 가동이 환경 의존적이라 강제 분리.
+BGE_M3_URL = os.environ.get("MV3_EVAL_BGE_M3_URL", "http://localhost:18081/embed")
+ARCTIC_KO_URL = os.environ.get("MV3_EVAL_ARCTIC_KO_URL", "http://localhost:8081/embed")
 TIMEOUT = 15
 
 # 사용자가 실제로 회수하려는 도메인 (eval_top3_domain.py에서 복사)
@@ -67,8 +82,11 @@ NOISE_QUERIES = [
 
 def embed(text: str, server_url: str, kind: str = "passage") -> list[float] | None:
     body = {"input": text}
-    if "8082" in server_url:
-        body["kind"] = kind  # Arctic-ko만 kind 필드 지원
+    # Arctic-ko 서버는 "kind" 필드 사용 (query 시 "query: " prefix 자동 부착).
+    # 옛 코드는 포트 "8082" 가 Arctic-ko 라는 hardcoded 가정. Sprint 14 후
+    # 포트 가변 → URL 이 ARCTIC_KO_URL 과 정확히 일치할 때만 kind 전송.
+    if server_url == ARCTIC_KO_URL:
+        body["kind"] = kind
     data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(
         server_url, data=data, headers={"Content-Type": "application/json"}, method="POST"
@@ -135,13 +153,39 @@ def top1_cosine(query: str, server_url: str, corpus: dict[Path, list[float]]) ->
     return best
 
 
+def _server_alive(url: str) -> bool:
+    health = url.rsplit("/", 1)[0] + "/health"
+    try:
+        with urllib.request.urlopen(health, timeout=2) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+
 def run_ab() -> None:
     files = collect_memory_files()
     print(f"corpus: {len(files)} memory files")
+    print(f"  BGE_M3_URL   = {BGE_M3_URL}")
+    print(f"  ARCTIC_KO_URL= {ARCTIC_KO_URL}")
+    if BGE_M3_URL == ARCTIC_KO_URL:
+        print(
+            "  ! 두 URL 이 같음 — A/B 비교 의미 없음. 각각 별도 서버 URL 지정 필요 "
+            "(MV3_EVAL_BGE_M3_URL / MV3_EVAL_ARCTIC_KO_URL).",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    if not _server_alive(BGE_M3_URL):
+        print(f"  ! BGE-M3 서버 ({BGE_M3_URL}) 응답 없음 — scripts/bge_m3_server.py 수동 spin-up 후 재시도",
+              file=sys.stderr)
+        sys.exit(3)
+    if not _server_alive(ARCTIC_KO_URL):
+        print(f"  ! Arctic-ko 서버 ({ARCTIC_KO_URL}) 응답 없음",
+              file=sys.stderr)
+        sys.exit(3)
 
-    print("\n[1/2] BGE-M3 (8081) indexing")
+    print("\n[1/2] BGE-M3 indexing")
     bge_corpus = index_corpus(BGE_M3_URL, files)
-    print("\n[2/2] Arctic-ko (8082) indexing")
+    print("\n[2/2] Arctic-ko indexing")
     arc_corpus = index_corpus(ARCTIC_KO_URL, files)
 
     print("\n" + "=" * 72)
