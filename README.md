@@ -2,7 +2,7 @@
 
 > Claude Code의 영구 기억 시스템. 4-layer 파이프라인으로 세션 요약 자동 주입 · 자연어 검색 · Memory Compiler · 자동 회수까지.
 
-**v3.2.0** · Karpathy LLM-as-Compiler 패턴 실증 · macOS (Apple Silicon) · MIT license · 360 passed
+**v3.2.1** · Karpathy LLM-as-Compiler 패턴 실증 · macOS (Apple Silicon) · MIT license · 360 passed
 
 ---
 
@@ -68,21 +68,38 @@ MindVault v3는 그 망각의 빈 자리를 세 축으로 메웁니다:
 **Latency** (n=3,193): **p50=40ms, p95=400ms, p99=471ms**. timeout(≥400ms) skip ~6%. v3.0.x post-ship perf 회귀 (avg 452ms) 는 해소 (NEXT-27/28 fix + alias_index/intent cache 운영 누적).
 
 > 옛 표기 추적:
-> - "295 passed" (v3.0.0) → "307" (v3.0.1) → "311" (v3.0.2) → "327" (v3.1.0) → "340" (v3.1.1/v3.1.2/v3.1.3) → **"360" (v3.2.0)**
+> - "295 passed" (v3.0.0) → "307" (v3.0.1) → "311" (v3.0.2) → "327" (v3.1.0) → "340" (v3.1.1/v3.1.2/v3.1.3) → **"360" (v3.2.0/v3.2.1)**
 > - "hit rate 2.6%" (measurement artifact) → "55.7%" (v3.0.2 audit 시점) → **"66.3%"** (현재)
 > - "avg 452ms" (NEXT-27 이전) → **"p50=40ms"** (현재)
 > - "Gemma 수동 사전 설치" (v3.0~v3.1.3) → **"install.sh 자동" (v3.2.0)**
 > - "Arctic-ko 모델 수동 변환" (v3.0~v3.1.3) → **"install.sh 자동 변환" (v3.2.0)**
+> - "Apple Silicon 전용 (v3.2.0~) — v3.3.0 백엔드 추상화 이후 가능" (v3.2.0 README) → **"Intel/Linux/Windows 사용 불가, 로컬 LLM 은 Gemma 4 E4B 만 지원" (v3.2.1 README 정확화, 미래 예고 제거)**
 
-## 요구사항
+## 요구사항 / 지원 환경
 
-- **macOS (Apple Silicon, M1+)** — MLX 백엔드 의존. Intel Mac / Linux 는 v3.3.0 (백엔드 추상화) 이후 지원 예정
+### 운영체제 / 하드웨어
+
+- ✅ **macOS, Apple Silicon (M1 / M2 / M3 / M4)** — 유일한 지원 환경
+- ❌ **Intel Mac** — 사용 불가 (MLX 가 Apple Silicon 전용)
+- ❌ **Linux** — 사용 불가 (launchd 의존)
+- ❌ **Windows** — 사용 불가
+
+### 로컬 LLM
+
+- ✅ **Gemma 4 E4B (`mlx-community/gemma-4-e4b-it-4bit`)** — 유일한 지원 모델
+  - **사전 설치 안 된 환경**: `install.sh` 가 자동 다운로드 + launchd 등록 (`com.mindvault.gemma-mlx`, port 8080, ~3GB)
+  - **사전 설치된 환경** (예: `com.<user>.gemma-mlx` 가 이미 port 8080 점유 중): `install.sh` 가 자동 감지 후 재사용 (신규 plist 설치 skip)
+- ❌ **ollama / LM Studio / llama.cpp / OpenAI API / Qwen / Llama / 기타 LLM** — 사용 불가
+
+### 임베딩 모델
+
+- ✅ **Arctic-ko (`dragonkue/snowflake-arctic-embed-l-v2.0-ko`, MLX 4bit)** — 유일한 지원 모델
+  - `install.sh` 가 자동 다운로드 + 4bit 양자화 변환 + launchd 등록 (port 8081, ~322MB)
+
+### 기타
+
 - **Python 3.10+**
 - **Claude Code** (hook 등록을 위해)
-- **로컬 Gemma MLX 서버** — `install.sh` 가 자동 설치 (`com.mindvault.gemma-mlx`, port 8080, ~3GB)
-  - 이미 다른 이름 (예: `com.<user>.gemma-mlx`) 으로 띄워둔 사용자는 자동 감지·재사용
-- **로컬 Arctic-ko MLX 서버** — `install.sh` 가 자동 설치 (port 8081, ~322MB 4bit 양자화 자동 변환)
-  - 원본 모델: `dragonkue/snowflake-arctic-embed-l-v2.0-ko`
 
 ## 설치
 
@@ -195,12 +212,13 @@ rm -rf ~/.cache/mlx-arctic-ko
 
 ## 알려진 한계
 
-1. **Gemma 4 E4B는 reasoning 모델** — 내부 사고에 토큰 많이 소비, `GEMMA_MAX_TOKENS` 크게 잡아야 함
-2. **한국어 특화 프롬프트** — 프롬프트가 한국어로 최적화. 영어 도메인은 검색 품질 일부 저하 가능
-3. **PII 필터는 키 패턴만** — 이메일/전화는 로컬 전용이라 통과
-4. **세션 경계 = JSONL 파일** — 한 파일 안에서 주제 바뀌어도 하나로 간주
-5. **macOS 전용** — launchd 의존 (Linux는 systemd 변환 필요)
-6. **Apple Silicon 전용** (v3.2.0~) — MLX 백엔드 (`mlx-lm`, `mlx-embeddings`) 가 Apple Silicon 만 지원. Intel Mac / Linux / Windows 에서 사용하려면 v3.3.0 (백엔드 추상화: ollama / OpenAI / 자체 endpoint) 이후 가능
+1. **Apple Silicon Mac 전용** — Intel Mac / Linux / Windows 사용 불가. MLX (`mlx-lm`, `mlx-embeddings`) 가 Apple Silicon 만 지원하고 launchd 도 macOS 전용.
+2. **로컬 LLM 은 Gemma 4 E4B (`mlx-community/gemma-4-e4b-it-4bit`) 만 지원** — ollama / LM Studio / llama.cpp / OpenAI API / 기타 LLM 사용 불가. 사전 설치 안 된 환경은 `install.sh` 가 자동 설치, 사전 설치된 환경은 자동 감지.
+3. **임베딩은 Arctic-ko (`dragonkue/snowflake-arctic-embed-l-v2.0-ko`, MLX 4bit) 만 지원** — 다른 임베딩 모델 사용 불가.
+4. **Gemma 4 E4B는 reasoning 모델** — 내부 사고에 토큰 많이 소비, `GEMMA_MAX_TOKENS` 크게 잡아야 함
+5. **한국어 특화 프롬프트** — 프롬프트가 한국어로 최적화. 영어 도메인은 검색 품질 일부 저하 가능
+6. **PII 필터는 키 패턴만** — 이메일/전화는 로컬 전용이라 통과
+7. **세션 경계 = JSONL 파일** — 한 파일 안에서 주제 바뀌어도 하나로 간주
 
 ## 디버깅
 
