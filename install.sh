@@ -120,6 +120,93 @@ if [ "${MV3_SPRINT45_ONLY:-0}" = "1" ]; then
   exit 0
 fi
 
+# ── Sprint 17 (v3.2.0) — Gemma 자동 설치 ───────────────────────────────────────
+# launchd 로 com.mindvault.gemma-mlx 서비스 띄움. 기존 다른 이름의 gemma-mlx
+# 서비스 (예: com.yonghaekim.gemma-mlx) 가 살아있으면 충돌 회피 — 새 plist 설치
+# skip, 기존 port 8080 점유 그대로 재사용.
+GEMMA_CACHE="${MV3_GEMMA_CACHE:-$HOME/.cache/mv3-gemma}"
+GEMMA_STEP_FILE="${MV3_GEMMA_STEP_FILE:-$GEMMA_CACHE/.mv3-step}"
+GEMMA_LAUNCH_AGENTS="${MV3_LAUNCH_AGENTS:-$HOME/Library/LaunchAgents}"
+GEMMA_SCRIPTS_DIR="${MV3_SCRIPTS_DIR:-$HOME/.claude/scripts/mindvault}"
+GEMMA_PLIST_SRC="$REPO_DIR/plist/com.mindvault.gemma-mlx.plist"
+GEMMA_PLIST_TARGET="$GEMMA_LAUNCH_AGENTS/com.mindvault.gemma-mlx.plist"
+GEMMA_RUNNER_SRC="$REPO_DIR/scripts/gemma_server_runner.sh"
+GEMMA_RUNNER_TARGET="$GEMMA_SCRIPTS_DIR/gemma_server_runner.sh"
+GEMMA_MODEL_ID="mlx-community/gemma-4-e4b-it-4bit"
+
+if [ "${MV3_SKIP_MODELS:-0}" = "1" ]; then
+  echo "→ Sprint 17 (Gemma 자동 설치) skip — non-arm64 또는 사용자 선택"
+else
+  echo ""
+  echo "── Sprint 17 — Gemma 자동 설치 ────────────────────────────────────────────"
+
+  # (a) 기존 Gemma launchd 서비스 감지 (예: com.yonghaekim.gemma-mlx).
+  # MV3_EXISTING_GEMMA 가 명시적으로 set 됐으면 (empty 포함) 그 값 사용 — test 격리.
+  # unset 일 때만 launchctl list 스캔.
+  if [ "${MV3_EXISTING_GEMMA+set}" = "set" ]; then
+    EXISTING_GEMMA="$MV3_EXISTING_GEMMA"
+  else
+    EXISTING_GEMMA="$(launchctl list 2>/dev/null | awk '/gemma-mlx/ {print $3}' | grep -v '^com.mindvault.gemma-mlx$' | head -1 || true)"
+  fi
+
+  # (b) 의존성 + 모델 DL — 충돌 여부와 무관.
+  mkdir -p "$GEMMA_CACHE"
+  if [ "${MV3_GEMMA_DRY_RUN:-0}" = "1" ]; then
+    do_step "deps-ok"    "$GEMMA_STEP_FILE" "true" || exit 1
+    do_step "downloaded" "$GEMMA_STEP_FILE" "true" || exit 1
+  else
+    do_step "deps-ok"    "$GEMMA_STEP_FILE" "python3 -m pip install --user --quiet mlx-lm" || exit 1
+    do_step "downloaded" "$GEMMA_STEP_FILE" "python3 -c \"from huggingface_hub import snapshot_download; snapshot_download('$GEMMA_MODEL_ID')\"" || exit 1
+  fi
+
+  # (c) plist 설치 — 기존 서비스 감지 시 skip.
+  if [ -n "$EXISTING_GEMMA" ]; then
+    echo "  ✓ 기존 Gemma launchd 서비스 감지됨 ($EXISTING_GEMMA, port 8080 점유 중)"
+    echo "    MindVault v3.2.0 의 신규 plist 설치 skip — 기존 서비스 재사용"
+    echo "    (옵션: 기존 plist 제거 후 ./install.sh 재실행하면 com.mindvault.gemma-mlx 사용)"
+    grep -q "^plist-loaded$" "$GEMMA_STEP_FILE" 2>/dev/null || echo "plist-loaded" >> "$GEMMA_STEP_FILE"
+  else
+    mkdir -p "$GEMMA_SCRIPTS_DIR"
+    cp "$GEMMA_RUNNER_SRC" "$GEMMA_RUNNER_TARGET"
+    chmod +x "$GEMMA_RUNNER_TARGET"
+
+    if [ "${MV3_GEMMA_DRY_RUN:-0}" = "1" ]; then
+      do_step "plist-loaded" "$GEMMA_STEP_FILE" \
+        "sed 's|__USER_HOME__|$HOME|g' '$GEMMA_PLIST_SRC' > '$GEMMA_PLIST_TARGET'" || exit 1
+    else
+      do_step "plist-loaded" "$GEMMA_STEP_FILE" \
+        "sed 's|__USER_HOME__|$HOME|g' '$GEMMA_PLIST_SRC' > '$GEMMA_PLIST_TARGET' && \
+         (launchctl unload '$GEMMA_PLIST_TARGET' 2>/dev/null || true) && \
+         launchctl load -w '$GEMMA_PLIST_TARGET'" || exit 1
+    fi
+  fi
+
+  # (d) 헬스체크 — 60초 콜드 스타트 대기 (degraded mode 허용).
+  if [ "${MV3_GEMMA_DRY_RUN:-0}" = "1" ]; then
+    grep -q "^healthy$" "$GEMMA_STEP_FILE" 2>/dev/null || echo "healthy" >> "$GEMMA_STEP_FILE"
+  else
+    HEALTH_OK=0
+    for i in $(seq 1 30); do
+      if curl -sS -o /dev/null -w "%{http_code}" http://127.0.0.1:8080/v1/models 2>/dev/null | grep -q "200"; then
+        HEALTH_OK=1
+        break
+      fi
+      sleep 2
+    done
+    if [ "$HEALTH_OK" = "1" ]; then
+      grep -q "^healthy$" "$GEMMA_STEP_FILE" 2>/dev/null || echo "healthy" >> "$GEMMA_STEP_FILE"
+      echo "  ✓ Gemma health: OK"
+    else
+      echo "  ⚠ Gemma 헬스체크 60초 timeout — install.sh 는 success exit (degraded mode)"
+      print_next_step "healthy"
+    fi
+  fi
+fi
+
+if [ "${MV3_SPRINT17_ONLY:-0}" = "1" ]; then
+  exit 0
+fi
+
 if [ ! -f "$SRC" ]; then
   echo "error: $SRC not found" >&2
   exit 1
