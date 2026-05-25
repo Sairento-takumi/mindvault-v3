@@ -3,8 +3,6 @@ description: "[mv3-skill] 현재 세션의 새 사실·결정·노하우를 Mind
 argument-hint: [--dry-run]
 allowed-tools:
   - Read
-  - Write
-  - Edit
   - Bash
   - Glob
   - Grep
@@ -36,9 +34,11 @@ MindVault v3 는 cwd 별로 별도 `~/.claude/projects/<slug>/memory/` 슬롯을
 ```bash
 PROJECTS_ROOT="$HOME/.claude/projects"
 
-# 모든 결정된 MEM_DIR 은 PROJECTS_ROOT 하위인지 realpath 로 검증 (boundary 강제)
+# 모든 결정된 MEM_DIR 은 PROJECTS_ROOT 하위인지 realpath 로 검증 (boundary 강제).
 # audit-2026-05-25 round-3 C: $root 자체는 명시 reject — `case .. */*` 가 empty 매칭
 # 가능성 차단. 또 끝의 trailing slash 도 안전하게 처리.
+# v3.2.3 (#20): basename 이 정확히 "memory" 인지 추가 검증. project root 자체나
+# 다른 잡디렉토리가 memory 슬롯으로 잘못 인식되는 경계 우회 차단.
 _validate_mem_dir() {
   local d="$1"
   [ -d "$d" ] || return 1
@@ -47,9 +47,11 @@ _validate_mem_dir() {
   root=$(cd "$PROJECTS_ROOT" 2>/dev/null && pwd -P) || return 1
   # $root 자체는 메모리 슬롯 아님 (그 안의 <slug>/memory/ 가 슬롯)
   [ "$abs" = "$root" ] && return 1
+  # basename 이 정확히 "memory" 가 아니면 거부 (v3.2.3 #20)
+  [ "$(basename "$abs")" = "memory" ] || return 1
   case "$abs/" in
     "$root"/) return 1 ;;       # 안전망: 위 검사가 빠뜨려도 root 거부
-    "$root"/*) return 0 ;;      # PROJECTS_ROOT/<무엇이든> 통과
+    "$root"/*) return 0 ;;      # PROJECTS_ROOT/<무엇이든>/memory 통과
     *) return 1 ;;
   esac
 }
@@ -110,7 +112,8 @@ TODAY=$(date +%Y-%m-%d)
 
 슬래시 명령어의 인자는 메인 Claude 가 받은 `$ARGUMENTS` 또는 호출 prompt 의 trailing text 로 전달된다 (Claude Code skill 계약). 메인은 그 텍스트를 직접 검사:
 
-- `--dry-run` 토큰이 인자 텍스트 안에 있으면 (substring match, 대소문자 무시) `DRY_RUN=1`. 신규 파일·기존 append·MEMORY.md 갱신을 모두 **skip** 하고 작성 *될* 내용만 stdout 으로 출력.
+- v3.2.3 (#21): `--dry-run` 은 **shell-like token 으로 정확 매칭**. 인자 텍스트를 공백 기준으로 분할 후 어떤 토큰이 정확히 `--dry-run` (대소문자 구분) 인 경우에만 `DRY_RUN=1`. 옛 substring match 는 자연어 인자 (`"--dry-run 쓰지 마"`) 도 trigger 시켰던 결함.
+- 신규 파일·기존 append·MEMORY.md 갱신을 모두 **skip** 하고 작성 *될* 내용만 stdout 으로 출력.
 - 그 외 인자는 무시 (`/close-session 정리해줘` 같은 자연어 인자 허용, 단 처리는 동일).
 
 메인 Claude 검출 의무: 호출 prompt 에 `--dry-run` 이 없는데 silent real write 하면 사용자 의도 위반. 인자 안 보였으면 명시적으로 "DRY_RUN=0, 실제 파일 수정 진행" 한 줄 보고.
@@ -207,38 +210,36 @@ How to apply: <앞으로 어떤 상황에서 활용할지>
 
 운영 비밀이 메모리에 들어가야 하는 경우 → 메모리 시스템 밖 (예: macOS Keychain, 1Password) 으로 유도.
 
-### 7. 동시성 가드 (file lock)
+### 7. 동시성 가드 (atomic mkdir lock)
 
-**주의**: 이 lock 은 **bash subshell 안의 write** (예: `echo ... >> file`, `mv tmp target`) 만 보호한다. 메인 Claude 가 `Edit` / `Write` tool 로 파일을 수정할 때는 lock 우회 — Claude Code 도구 호출이 bash 를 거치지 않기 때문. 따라서:
-
-- **권장**: 메모리 파일 생성·갱신은 `Bash` 도구로 lock 내부에서 처리 (heredoc/printf 후 atomic rename). `Edit`/`Write` 는 사용자 인터랙티브 edit 단계에서만.
-- **차선** (Edit/Write 사용 시 race 검출):
-  ```bash
-  # §1 MEM_DIR 결정 직후 mtime 기록
-  INITIAL_MTIME=$(stat -f '%m' "$MEM_DIR/MEMORY.md" 2>/dev/null || echo 0)
-  # ... 메인 Claude 가 Edit/Write 로 갱신 후 ...
-  # §8 인덱스 갱신 직전 다시 확인
-  CURRENT_MTIME=$(stat -f '%m' "$MEM_DIR/MEMORY.md" 2>/dev/null || echo 0)
-  if [ "$CURRENT_MTIME" != "$INITIAL_MTIME" ]; then
-    echo "⚠️  MEMORY.md 가 close-session 진행 중 다른 writer 에 의해 변경됨 ($INITIAL_MTIME → $CURRENT_MTIME). 사용자 확인 후 진행 권장." >&2
-  fi
-  ```
+**v3.2.3 (#14, #24)**: 옛 `flock` 기반 lock 은 macOS 기본 환경에 `flock` 부재로 silent skip 되어 race 가드가 실제로는 없었던 문제. macOS-native `mkdir`-atomic 패턴으로 교체 + Edit/Write allowed-tools 자체 제거 — 메모리 write 는 항상 Bash 만 사용.
 
 `/close-session` 실행 중 SessionEnd hook 의 자동 Memory Compiler 가 같은 `$MEM_DIR` 에 동시 쓰기 할 수 있다 (race → interleave 또는 lost update). bash write 시 lock 획득:
 
 ```bash
-LOCK_FILE="$MEM_DIR/.close-session.lock"
-# fd 200: parent shell 점유 충돌 가능성을 극소화한 명시 high fd.
-# 옛 fd 9 는 shell 일부 환경에서 special-use 또는 parent 점유 가능 — 200+ 는 충돌 사실상 0.
-# bash 4.1+ `{var}>` 동적 fd 할당은 macOS 기본 bash 3.2 호환 안 되어 미사용 (검증: 2026-05-25).
-exec 200>"$LOCK_FILE"
-flock -x -w 30 200 || { echo "lock acquire failed (30s timeout) — 다른 writer 활동 중"; exit 1; }
+LOCK_DIR="$MEM_DIR/.close-session.lock"
+# v3.2.3 (#14): mkdir 은 POSIX 보장 atomic — flock 의존성 0, macOS 기본 환경 OK.
+# 디렉토리 생성 자체가 lock acquire. 30초 timeout polling.
+acquired=0
+for _i in $(seq 1 60); do
+  if mkdir "$LOCK_DIR" 2>/dev/null; then
+    acquired=1
+    break
+  fi
+  sleep 0.5
+done
+if [ "$acquired" != "1" ]; then
+  echo "lock acquire failed (30s timeout) — 다른 writer 활동 중. /close-session 종료." >&2
+  exit 1
+fi
+
+# v3.2.3 (#8): EXIT trap 으로 lock 디렉토리 cleanup. mkdir 패턴은 디렉토리 자체가
+# lock 상태라 반드시 제거 — 옛 flock 의 "fd 자동 닫힘이라 file rm 불필요" 와 다름.
+trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
 # … 이 안에서 신규 파일 작성, MEMORY.md append 등 모든 write 수행 …
-# process 종료 시 fd 자동 닫힘 → lock 자동 해제. trap 은 lock 파일만 정리 (stale 누적 방지).
-# 의존성 주의: `flock` 은 macOS 기본 미포함 (brew install flock 필요). 미존재 시 §7 전체
-# 가드 skip 되고 Edit/Write race-detect (§7 차선) 로 fall through.
-trap 'rm -f "$LOCK_FILE"' EXIT
 ```
+
+**stale lock 회복**: process 가 crash 로 EXIT trap 못 돌리면 `$LOCK_DIR` 잔존. 사용자가 명시 `rmdir "$LOCK_DIR"` 후 재실행. 자동 회복은 의도 위반 위험으로 비추 — 다른 writer 가 진짜 살아있을 수 있음.
 
 신규 토픽 파일 생성도 **atomic rename + race detect** 패턴:
 
@@ -284,8 +285,9 @@ MEMORY.md: M줄 (한계 200)
 
 ## 안전 규칙
 
-- **`Edit replace_all` 금지** — 기존 항목 덮어쓰기 위험. 항상 append.
+- **Bash 만 사용해 write** — Edit/Write 도구는 allowed-tools 에서 제외됨 (v3.2.3 #24). 파일 갱신은 Bash heredoc/printf + atomic mv 만. 이유: §7 의 mkdir-atomic lock 이 bash subshell 안에서만 의미가 있어서.
 - **삭제·수정 금지** — 옛 사실이 stale 해 보여도 supersession 표시만. 예: `[2026-05-13] 위 정책은 deprecated. 새 정책 → [[link]]`
+- **append-only** — 기존 파일 본문 끝에만 새 줄 추가. 기존 줄 덮어쓰기 절대 금지.
 - **자동 hook 절대 만들지 말 것** — `ScheduleWakeup`/`cron` 가능하지만 silent failure 위험으로 비추.
 - **drift 점검** — 신규 파일 작성 후 반드시 `ls` 로 파일 존재 확인.
 - **민감 정보 차단** — API 키·비밀번호·토큰은 메모리에 절대 쓰지 말 것. 위치만 기록 (§6 가드 참조).

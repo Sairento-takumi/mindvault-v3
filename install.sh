@@ -98,6 +98,54 @@ deploy_skill() {
   echo "  ✓ installed ${label} skill at $target"
 }
 
+# v3.2.3 — generic file deploy (executable). hook/wrapper/server script 용.
+# deploy_skill 과 동일 .bak 복원 패턴 + chmod +x.
+deploy_exec() {
+  local src="$1" target="$2" label="${3:-$(basename "$target")}"
+  if [ ! -f "$src" ]; then
+    echo "  ✗ ${label}: source missing ($src)" >&2
+    return 1
+  fi
+  if [ -f "$target" ]; then
+    cp "$target" "$target.bak"
+  fi
+  if ! cp "$src" "$target"; then
+    if [ -f "$target.bak" ]; then
+      mv "$target.bak" "$target"
+      echo "  ✗ ${label}: cp failed, restored from .bak" >&2
+    else
+      echo "  ✗ ${label}: cp failed, no backup to restore" >&2
+    fi
+    return 1
+  fi
+  rm -f "$target.bak"
+  chmod +x "$target"
+}
+
+# v3.2.3 — plist 템플릿 deploy. sed 의 replacement metachar (`&`, `\`) 안전을
+# 위해 Python 으로 처리. __USER_HOME__ → $HOME 단일 치환 후 LaunchAgents 에 쓰기.
+# launchctl unload/load 까지 처리. set -e 환경에서 부분 실패 깔끔히.
+deploy_plist() {
+  local src="$1" target="$2" label="${3:-$(basename "$target" .plist)}"
+  if [ ! -f "$src" ]; then
+    echo "  ✗ ${label}: plist source missing ($src)" >&2
+    return 1
+  fi
+  python3 - "$src" "$target" <<'PY' || return 1
+import os, sys
+src, target = sys.argv[1], sys.argv[2]
+home = os.environ.get("HOME") or os.path.expanduser("~")
+content = open(src).read().replace("__USER_HOME__", home)
+tmp = target + ".tmp"
+open(tmp, "w").write(content)
+os.replace(tmp, target)
+PY
+  if [ "${MV3_PLIST_SKIP_LAUNCHCTL:-0}" != "1" ]; then
+    launchctl unload "$target" 2>/dev/null || true
+    launchctl load -w "$target" 2>/dev/null || true
+  fi
+}
+
 if [ "${MV3_SOURCE_HELPERS_ONLY:-0}" = "1" ]; then
   return 0 2>/dev/null || exit 0
 fi
@@ -155,6 +203,12 @@ else
   do_step "downloaded" "$ARCTIC_STEP_FILE" "python3 -c \"from huggingface_hub import snapshot_download; snapshot_download('dragonkue/snowflake-arctic-embed-l-v2.0-ko')\"" || exit 1
   do_step "converted"  "$ARCTIC_STEP_FILE" "python3 '$CONVERT_SCRIPT' --target '$ARCTIC_TARGET'" || exit 1
   do_step "verified"   "$ARCTIC_STEP_FILE" "[ -f '$ARCTIC_TARGET/model.safetensors' ]" || exit 1
+fi
+
+# v3.2.3 (#5) — ARCTIC_MODEL_READY 는 step file 대신 실제 파일 존재 검증.
+# MV3_SKIP_MODELS=1 환경에서도 사용자가 직접 모델 변환을 끝낸 후 install.sh
+# 재실행하면 초기 인덱싱이 자동으로 진행되도록.
+if [ -f "$ARCTIC_TARGET/model.safetensors" ]; then
   ARCTIC_MODEL_READY=1
 fi
 
@@ -175,6 +229,10 @@ GEMMA_PLIST_TARGET="$GEMMA_LAUNCH_AGENTS/com.mindvault.gemma-mlx.plist"
 GEMMA_RUNNER_SRC="$REPO_DIR/scripts/gemma_server_runner.sh"
 GEMMA_RUNNER_TARGET="$GEMMA_SCRIPTS_DIR/gemma_server_runner.sh"
 GEMMA_MODEL_ID="mlx-community/gemma-4-e4b-it-4bit"
+
+# v3.2.3 (#13) — fresh macOS 는 ~/Library/LaunchAgents 부재 가능.
+# 첫 plist deploy 직전 명시 생성 — set -e 가 ENOENT 로 abort 회피.
+mkdir -p "$GEMMA_LAUNCH_AGENTS" "$GEMMA_SCRIPTS_DIR"
 
 if [ "${MV3_SKIP_MODELS:-0}" = "1" ]; then
   echo "→ Sprint 17 (Gemma 자동 설치) skip — non-arm64 또는 사용자 선택"
@@ -202,25 +260,34 @@ else
   fi
 
   # (c) plist 설치 — 기존 서비스 감지 시 skip.
+  # v3.2.3 (#18): plist-loaded 는 cheap step 이라 do_step 캐시 없이 항상 refresh —
+  # template 변경이 silent 로 묻히는 idempotency 버그 차단. step entry 도 cleanup
+  # 후 재기록 (upgrade 일관성).
   if [ -n "$EXISTING_GEMMA" ]; then
     echo "  ✓ 기존 Gemma launchd 서비스 감지됨 ($EXISTING_GEMMA, port 8080 점유 중)"
-    echo "    MindVault v3.2.0 의 신규 plist 설치 skip — 기존 서비스 재사용"
+    echo "    MindVault v3.2.x 의 신규 plist 설치 skip — 기존 서비스 재사용"
     echo "    (옵션: 기존 plist 제거 후 ./install.sh 재실행하면 com.mindvault.gemma-mlx 사용)"
-    grep -q "^plist-loaded$" "$GEMMA_STEP_FILE" 2>/dev/null || echo "plist-loaded" >> "$GEMMA_STEP_FILE"
+    # step entry 정리 후 재기록 (upgrade 시 멱등)
+    if [ -f "$GEMMA_STEP_FILE" ]; then
+      grep -v "^plist-loaded$" "$GEMMA_STEP_FILE" > "$GEMMA_STEP_FILE.tmp" || true
+      mv "$GEMMA_STEP_FILE.tmp" "$GEMMA_STEP_FILE"
+    fi
+    echo "plist-loaded" >> "$GEMMA_STEP_FILE"
   else
-    mkdir -p "$GEMMA_SCRIPTS_DIR"
-    cp "$GEMMA_RUNNER_SRC" "$GEMMA_RUNNER_TARGET"
-    chmod +x "$GEMMA_RUNNER_TARGET"
+    deploy_exec "$GEMMA_RUNNER_SRC" "$GEMMA_RUNNER_TARGET" "gemma_server_runner" || exit 1
 
     if [ "${MV3_GEMMA_DRY_RUN:-0}" = "1" ]; then
-      do_step "plist-loaded" "$GEMMA_STEP_FILE" \
-        "sed 's|__USER_HOME__|$HOME|g' '$GEMMA_PLIST_SRC' > '$GEMMA_PLIST_TARGET'" || exit 1
+      MV3_PLIST_SKIP_LAUNCHCTL=1 deploy_plist "$GEMMA_PLIST_SRC" "$GEMMA_PLIST_TARGET" "gemma plist" || exit 1
     else
-      do_step "plist-loaded" "$GEMMA_STEP_FILE" \
-        "sed 's|__USER_HOME__|$HOME|g' '$GEMMA_PLIST_SRC' > '$GEMMA_PLIST_TARGET' && \
-         (launchctl unload '$GEMMA_PLIST_TARGET' 2>/dev/null || true) && \
-         launchctl load -w '$GEMMA_PLIST_TARGET'" || exit 1
+      deploy_plist "$GEMMA_PLIST_SRC" "$GEMMA_PLIST_TARGET" "gemma plist" || exit 1
     fi
+    # step entry 정리 후 재기록 (always refresh, content drift 차단)
+    if [ -f "$GEMMA_STEP_FILE" ]; then
+      grep -v "^plist-loaded$" "$GEMMA_STEP_FILE" > "$GEMMA_STEP_FILE.tmp" || true
+      mv "$GEMMA_STEP_FILE.tmp" "$GEMMA_STEP_FILE"
+    fi
+    echo "plist-loaded" >> "$GEMMA_STEP_FILE"
+    echo "  ✓ plist-loaded (always refresh)"
   fi
 
   # (d) 헬스체크 — 60초 콜드 스타트 대기 (degraded mode 허용).
@@ -259,54 +326,94 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 
 mkdir -p "$HOOKS_DIR" "$HOME/.claude/mindvault-v3/cache" "$SCRIPTS_DIR" "$COMMANDS_DIR"
-cp "$SRC" "$TARGET"
-chmod +x "$TARGET"
+
+# v3.2.3 (#7) — 누락된 skill·hook 을 silent skip 하지 않고 누적 manifest 에 기록.
+# 설치 끝에서 누락 건수 확인 + 사용자에게 명확 보고. uninstall.sh 가 이 manifest 를
+# 보고 personal SKILL 백업 복원 (#15) 도 같은 메커니즘 사용.
+INSTALL_MANIFEST_DIR="$HOME/.claude/mindvault-v3"
+INSTALL_MANIFEST="$INSTALL_MANIFEST_DIR/.install-manifest"
+mkdir -p "$INSTALL_MANIFEST_DIR"
+: > "$INSTALL_MANIFEST"  # truncate — 매 install 마다 새로 기록
+DEPLOY_FAILURES=0
+
+manifest_record() {
+  # type=path 형식, 한 줄
+  echo "$1=$2" >> "$INSTALL_MANIFEST"
+}
+
+deploy_exec "$SRC" "$TARGET" "session-memory hook" || { DEPLOY_FAILURES=$((DEPLOY_FAILURES+1)); }
+manifest_record "hook" "$TARGET"
 echo "✓ copied hook to $TARGET"
 
 # Sprint 2: scripts/mindvault/ 배포
 for f in "${SPRINT2_SRC[@]}"; do
   if [ -f "$f" ]; then
-    cp "$f" "$SCRIPTS_DIR/$(basename "$f")"
-    chmod +x "$SCRIPTS_DIR/$(basename "$f")"
+    deploy_exec "$f" "$SCRIPTS_DIR/$(basename "$f")" "$(basename "$f")" \
+      || DEPLOY_FAILURES=$((DEPLOY_FAILURES+1))
+    manifest_record "script" "$SCRIPTS_DIR/$(basename "$f")"
   fi
 done
 echo "✓ deployed Sprint 2 scripts to $SCRIPTS_DIR"
 
-# Sprint 2: /recall 스킬 배포 (v3.2.2 — defensive deploy_skill)
-deploy_skill "$RECALL_SKILL_SRC" "$RECALL_SKILL_TARGET" "/recall" || true
+# Sprint 2: /recall 스킬 배포 (v3.2.2 — defensive deploy_skill).
+# v3.2.3 (#16): 옛 `|| true` 가 cp 실패 swallow → "Installation complete" 였는데
+# 실제로는 skill 미설치. 이제 실패 누적 후 끝에서 alarm.
+deploy_skill "$RECALL_SKILL_SRC" "$RECALL_SKILL_TARGET" "/recall" \
+  || DEPLOY_FAILURES=$((DEPLOY_FAILURES+1))
+manifest_record "skill" "$RECALL_SKILL_TARGET"
 
 # Sprint 3: SessionEnd 훅 + 추가 스크립트 + /memory review 스킬
+END_HOOK_DEPLOYED=0
 if [ -f "$END_SRC" ]; then
-  cp "$END_SRC" "$END_TARGET"
-  chmod +x "$END_TARGET"
-  echo "✓ copied SessionEnd hook to $END_TARGET"
+  if deploy_exec "$END_SRC" "$END_TARGET" "session-memory-end hook"; then
+    manifest_record "hook" "$END_TARGET"
+    echo "✓ copied SessionEnd hook to $END_TARGET"
+    END_HOOK_DEPLOYED=1
+  else
+    DEPLOY_FAILURES=$((DEPLOY_FAILURES+1))
+  fi
 fi
-# NEXT-24: async wrapper sync. wrapper 가 깨지면 Claude Code 가 hook subprocess
-# 강제 종료 → Gemma 호출 도중 SIGTERM → staged 안 됨. install 재실행 시 자동 회복.
+# v3.2.3 (#4): async wrapper 가 src 부재 시 silent skip 후에도 register 항상 호출 →
+# settings.json 에 broken path 등록. 이제 wrapper deploy 성공 여부를 추적해서
+# register 단계에서 가드.
+END_WRAPPER_DEPLOYED=0
 if [ -f "$END_WRAPPER_SRC" ]; then
-  cp "$END_WRAPPER_SRC" "$END_WRAPPER_TARGET"
-  chmod +x "$END_WRAPPER_TARGET"
-  echo "✓ copied SessionEnd async wrapper to $END_WRAPPER_TARGET"
+  if deploy_exec "$END_WRAPPER_SRC" "$END_WRAPPER_TARGET" "session-memory-end-async wrapper"; then
+    manifest_record "hook" "$END_WRAPPER_TARGET"
+    echo "✓ copied SessionEnd async wrapper to $END_WRAPPER_TARGET"
+    END_WRAPPER_DEPLOYED=1
+  else
+    DEPLOY_FAILURES=$((DEPLOY_FAILURES+1))
+  fi
 fi
 for f in "${SPRINT3_SRC[@]}"; do
   if [ -f "$f" ]; then
-    cp "$f" "$SCRIPTS_DIR/$(basename "$f")"
-    chmod +x "$SCRIPTS_DIR/$(basename "$f")"
+    deploy_exec "$f" "$SCRIPTS_DIR/$(basename "$f")" "$(basename "$f")" \
+      || DEPLOY_FAILURES=$((DEPLOY_FAILURES+1))
+    manifest_record "script" "$SCRIPTS_DIR/$(basename "$f")"
   fi
 done
 echo "✓ deployed Sprint 3 scripts to $SCRIPTS_DIR"
-# Sprint 3: /memory_review 스킬 배포 (v3.2.2 — defensive deploy_skill)
-deploy_skill "$MEMORY_SKILL_SRC" "$MEMORY_SKILL_TARGET" "/memory_review" || true
+# Sprint 3: /memory_review 스킬 배포 (v3.2.2 — defensive deploy_skill).
+deploy_skill "$MEMORY_SKILL_SRC" "$MEMORY_SKILL_TARGET" "/memory_review" \
+  || DEPLOY_FAILURES=$((DEPLOY_FAILURES+1))
+manifest_record "skill" "$MEMORY_SKILL_TARGET"
 
 # /close-session + /cs alias 배포 (v3.2.2 — defensive deploy_skill).
 # 자동 hook 의 narrative 보완용 명시 closer.
-deploy_skill "$CLOSE_SESSION_SKILL_SRC" "$CLOSE_SESSION_SKILL_TARGET" "/close-session" || true
-deploy_skill "$CS_SKILL_SRC"            "$CS_SKILL_TARGET"            "/cs"            || true
+deploy_skill "$CLOSE_SESSION_SKILL_SRC" "$CLOSE_SESSION_SKILL_TARGET" "/close-session" \
+  || DEPLOY_FAILURES=$((DEPLOY_FAILURES+1))
+manifest_record "skill" "$CLOSE_SESSION_SKILL_TARGET"
+deploy_skill "$CS_SKILL_SRC" "$CS_SKILL_TARGET" "/cs" \
+  || DEPLOY_FAILURES=$((DEPLOY_FAILURES+1))
+manifest_record "skill" "$CS_SKILL_TARGET"
 
 # v3.1.1 (audit-2026-05-25 post-ship CRITICAL): 옛 personal SKILL 디렉토리
 # `~/.claude/skills/{close-session,cs}/` 가 새 deploy 본을 가릴 수 있음.
 # round-6 A,B 가드 추가: SKILL.md 부재 시 corrupt install 로 간주 → 보존,
 # backup 디렉토리에 PID 추가 (같은 초 parallel install collision 차단).
+# v3.2.3 (#15) — displace 시 manifest 에 [원본 경로 → 백업 경로] 기록.
+# uninstall.sh 가 이 manifest 를 보고 사용자 personal SKILL 자동 복원.
 PERSONAL_SKILLS_BACKUP="$HOME/.claude/skills.attic/mv3-skill-conflict-$(date +%Y%m%d-%H%M%S)-$$"
 for personal in "$HOME/.claude/skills/close-session" "$HOME/.claude/skills/cs"; do
   if [ -d "$personal" ]; then
@@ -318,10 +425,12 @@ for personal in "$HOME/.claude/skills/close-session" "$HOME/.claude/skills/cs"; 
       # 이미 v3 deploy 본의 변형 — 그대로 두고 새 본이 commands/ 에서 작동
       echo "↷ $personal 는 v3 변형 (sentinel ✓) — 보존, $CLOSE_SESSION_SKILL_TARGET 우선 매칭"
     else
-      # 사용자 personal — 백업 후 제거
+      # 사용자 personal — 백업 후 제거, manifest 에 restore 매핑 기록
       mkdir -p "$PERSONAL_SKILLS_BACKUP"
       mv "$personal" "$PERSONAL_SKILLS_BACKUP/"
+      manifest_record "personal_skill_displaced" "$personal=>$PERSONAL_SKILLS_BACKUP/$(basename "$personal")"
       echo "⚠️  $personal 를 $PERSONAL_SKILLS_BACKUP/ 로 백업 (옛 personal SKILL 이 v3 본을 가리지 않도록)"
+      echo "    uninstall 시 자동 복원됨 (manifest: $INSTALL_MANIFEST)"
     fi
   fi
 done
@@ -334,15 +443,43 @@ fi
 cp "$SETTINGS" "$SETTINGS.bak"
 echo "✓ backup at $SETTINGS.bak"
 
-python3 - "$SETTINGS" "$HOOK_CMD" "$TARGET" "$END_WRAPPER_TARGET" <<'PY'
-import json, sys
+# v3.2.3 (#4): SessionEnd register 는 wrapper 가 실제 deploy 되었을 때만 호출.
+# wrapper 부재 시 register 호출하면 settings.json 에 broken path 박힘.
+# (#17): atomic write — tmp 파일에 쓰고 JSON 검증 후 os.replace. 실패 시 .bak 자동 복원.
+SESSION_END_REGISTER=""
+if [ "$END_WRAPPER_DEPLOYED" = "1" ]; then
+  SESSION_END_REGISTER="$END_WRAPPER_TARGET"
+fi
+
+python3 - "$SETTINGS" "$HOOK_CMD" "$TARGET" "$SESSION_END_REGISTER" <<'PY'
+import json, os, sys
 from pathlib import Path
 
 path = Path(sys.argv[1])
 start_cmd = sys.argv[2]
 start_target = sys.argv[3]
-end_wrapper_cmd = sys.argv[4]
-data = json.loads(path.read_text()) if path.stat().st_size else {}
+end_wrapper_cmd = sys.argv[4]  # empty string 이면 register skip
+
+try:
+    raw = path.read_text() if path.stat().st_size else "{}"
+    data = json.loads(raw)
+except (json.JSONDecodeError, OSError) as e:
+    bak = path.with_suffix(path.suffix + ".bak")
+    msg = (f"⚠️  {path} 가 invalid JSON ({e}).\n"
+           f"   .bak 에서 복원 시도: {bak}\n"
+           f"   복원 후 다시 install.sh 실행 권장.")
+    print(msg, file=sys.stderr)
+    if bak.exists():
+        try:
+            data = json.loads(bak.read_text())
+            path.write_text(bak.read_text())
+            print(f"   ✓ restored from {bak}", file=sys.stderr)
+        except Exception as e2:
+            print(f"   ✗ .bak 도 invalid ({e2}) — 수동 복구 필요", file=sys.stderr)
+            sys.exit(1)
+    else:
+        sys.exit(1)
+
 hooks = data.setdefault("hooks", {})
 
 
@@ -368,19 +505,34 @@ def register(event_name, cmd, match_targets):
             kept_events.append(entry)
     if cleaned:
         print(f"  removed {cleaned} stale MindVault entries from {event_name}")
-    kept_events.append({
-        "matcher": "*",
-        "hooks": [{"type": "command", "command": cmd}],
-    })
-    hooks[event_name] = kept_events
-    print(f"✓ registered {event_name} hook")
+    if cmd:  # empty cmd 이면 register skip — cleanup 만 수행 (v3.2.3 #4)
+        kept_events.append({
+            "matcher": "*",
+            "hooks": [{"type": "command", "command": cmd}],
+        })
+        hooks[event_name] = kept_events
+        print(f"✓ registered {event_name} hook")
+    else:
+        # 빈 list 면 key 자체 제거 (uninstall 의 cleanup 패턴과 일관)
+        if kept_events:
+            hooks[event_name] = kept_events
+        else:
+            hooks.pop(event_name, None)
+        print(f"↷ {event_name} register skipped — wrapper 미배포, broken path 등록 회피")
 
 
 register("SessionStart", start_cmd, [start_target])
 # NEXT-25: SessionEnd 는 wrapper 만 단일 등록 — 옛 직접 py path 도 같이 cleanup.
+# v3.2.3 (#4): end_wrapper_cmd 가 empty 이면 cleanup 만 하고 register skip.
 register("SessionEnd", end_wrapper_cmd,
          ["session-memory-end.py", "session-memory-end-async.sh"])
-path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+
+# v3.2.3 (#17): atomic write via tmp + JSON 재검증 + os.replace.
+serialized = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+json.loads(serialized)  # round-trip 검증 (corruption 차단)
+tmp = path.with_suffix(path.suffix + ".tmp")
+tmp.write_text(serialized)
+os.replace(tmp, path)
 PY
 
 echo ""
@@ -407,8 +559,14 @@ echo "── Sprint 4 — Layer 4 Memory Recall (Arctic-ko hybrid RRF) ───
 # Sprint 4 추가 자산
 ARCTIC_SERVER_SRC="$REPO_DIR/scripts/arctic_ko_server.py"
 ARCTIC_SERVER_TARGET="$SCRIPTS_DIR/arctic_ko_server.py"
-ARCTIC_PLIST_SRC="$REPO_DIR/plist/com.yonghaekim.arctic-ko-mlx.plist"
-ARCTIC_PLIST_TARGET="$HOME/Library/LaunchAgents/com.yonghaekim.arctic-ko-mlx.plist"
+# v3.2.3 (#1, #6) — Arctic-ko 도 wrapper 로 Python resolve. plist Python 3.10
+# 절대경로 박힘 → 다른 사용자 fail 차단.
+ARCTIC_RUNNER_SRC="$REPO_DIR/scripts/arctic_ko_server_runner.sh"
+ARCTIC_RUNNER_TARGET="$SCRIPTS_DIR/arctic_ko_server_runner.sh"
+# v3.2.3 (#2) — com.yonghaekim.arctic-ko-mlx → com.mindvault.arctic-ko-mlx
+# (Gemma 와 동일 네임스페이스 통일, public ship sanitize).
+ARCTIC_PLIST_SRC="$REPO_DIR/plist/com.mindvault.arctic-ko-mlx.plist"
+ARCTIC_PLIST_TARGET="$HOME/Library/LaunchAgents/com.mindvault.arctic-ko-mlx.plist"
 MEMORY_HOOK_SRC="$REPO_DIR/hooks/memory-recall.py"
 MEMORY_HOOK_TARGET="$HOOKS_DIR/memory-recall.py"
 SPRINT4_SRC=("$REPO_DIR/src/memory_indexer.py" "$REPO_DIR/src/memory_search.py")
@@ -425,23 +583,32 @@ fi
 # 4.2 — Arctic-ko 모델 자동 변환은 위 Sprint 4.5 (v3.2.0) 가 처리.
 # (옛 수동 변환 안내 블록은 v3.2.0 에서 제거됨)
 
-# 4.3 스크립트 + 서버 배포
+# 4.3 스크립트 + 서버 배포 (v3.2.3: deploy_exec 통일)
 for f in "${SPRINT4_SRC[@]}"; do
   if [ -f "$f" ]; then
-    cp "$f" "$SCRIPTS_DIR/$(basename "$f")"
-    chmod +x "$SCRIPTS_DIR/$(basename "$f")"
+    deploy_exec "$f" "$SCRIPTS_DIR/$(basename "$f")" "$(basename "$f")" \
+      || DEPLOY_FAILURES=$((DEPLOY_FAILURES+1))
+    manifest_record "script" "$SCRIPTS_DIR/$(basename "$f")"
   fi
 done
 if [ -f "$ARCTIC_SERVER_SRC" ]; then
-  cp "$ARCTIC_SERVER_SRC" "$ARCTIC_SERVER_TARGET"
-  chmod +x "$ARCTIC_SERVER_TARGET"
+  deploy_exec "$ARCTIC_SERVER_SRC" "$ARCTIC_SERVER_TARGET" "arctic_ko_server.py" \
+    || DEPLOY_FAILURES=$((DEPLOY_FAILURES+1))
+  manifest_record "script" "$ARCTIC_SERVER_TARGET"
+fi
+# v3.2.3 (#1) — Arctic-ko runner wrapper deploy.
+if [ -f "$ARCTIC_RUNNER_SRC" ]; then
+  deploy_exec "$ARCTIC_RUNNER_SRC" "$ARCTIC_RUNNER_TARGET" "arctic_ko_server_runner" \
+    || DEPLOY_FAILURES=$((DEPLOY_FAILURES+1))
+  manifest_record "script" "$ARCTIC_RUNNER_TARGET"
 fi
 echo "✓ deployed Sprint 4 scripts to $SCRIPTS_DIR"
 
 # Sprint 4: memory_review_cli도 reindex 트리거 포함된 새 버전으로 재배포
 if [ -f "$REPO_DIR/src/memory_review_cli.py" ]; then
-  cp "$REPO_DIR/src/memory_review_cli.py" "$SCRIPTS_DIR/memory_review_cli.py"
-  chmod +x "$SCRIPTS_DIR/memory_review_cli.py"
+  deploy_exec "$REPO_DIR/src/memory_review_cli.py" "$SCRIPTS_DIR/memory_review_cli.py" \
+    "memory_review_cli.py" || DEPLOY_FAILURES=$((DEPLOY_FAILURES+1))
+  manifest_record "script" "$SCRIPTS_DIR/memory_review_cli.py"
 fi
 
 # post-ship: 런타임 import dependencies — 이전 install.sh 가 명시 누락한 채
@@ -468,35 +635,45 @@ RUNTIME_EXTRA_SRC=(
 )
 for f in "${RUNTIME_EXTRA_SRC[@]}"; do
   if [ -f "$f" ]; then
-    cp "$f" "$SCRIPTS_DIR/$(basename "$f")"
-    chmod +x "$SCRIPTS_DIR/$(basename "$f")"
+    deploy_exec "$f" "$SCRIPTS_DIR/$(basename "$f")" "$(basename "$f")" \
+      || DEPLOY_FAILURES=$((DEPLOY_FAILURES+1))
+    manifest_record "script" "$SCRIPTS_DIR/$(basename "$f")"
   fi
 done
 echo "✓ deployed runtime extras ($(echo "${RUNTIME_EXTRA_SRC[@]}" | wc -w | tr -d ' ') files) to $SCRIPTS_DIR"
 
-# 4.4a 옛 BGE-M3 plist migration (Sprint 9 이전 설치자 → Arctic-ko 전환)
-OLD_BGE_PLIST="$HOME/Library/LaunchAgents/com.yonghaekim.bge-m3-mlx.plist"
-if [ -f "$OLD_BGE_PLIST" ]; then
-  launchctl unload "$OLD_BGE_PLIST" >/dev/null 2>&1 || true
-  rm -f "$OLD_BGE_PLIST"
-  echo "✓ migrated: removed legacy BGE-M3 plist ($OLD_BGE_PLIST)"
-fi
+# 4.4a v3.2.3 (#3) — legacy plist migration (com.yonghaekim.*):
+# - com.yonghaekim.bge-m3-mlx (Sprint 9 이전 설치자)
+# - com.yonghaekim.arctic-ko-mlx (v3.2.0~v3.2.2 설치자 → v3.2.3 sanitize 후 rename)
+LEGACY_LAUNCHD_LABELS=(
+  "com.yonghaekim.bge-m3-mlx"
+  "com.yonghaekim.arctic-ko-mlx"
+)
+for label in "${LEGACY_LAUNCHD_LABELS[@]}"; do
+  legacy_plist="$HOME/Library/LaunchAgents/${label}.plist"
+  if [ -f "$legacy_plist" ]; then
+    launchctl unload "$legacy_plist" >/dev/null 2>&1 || true
+    rm -f "$legacy_plist"
+    echo "✓ migrated: removed legacy plist ($label)"
+  fi
+done
 
-# 4.4 Arctic-ko launchd plist
-# 템플릿 placeholder(__USER_HOME__) 를 현재 $HOME 으로 치환한 뒤 설치.
-# sed delimiter 로 `|` 사용 (path 에 `/` 가 들어가므로).
+# 4.4 Arctic-ko launchd plist (v3.2.3: deploy_plist 헬퍼 — Python 기반 안전 치환)
 if [ -f "$ARCTIC_PLIST_SRC" ]; then
-  sed "s|__USER_HOME__|$HOME|g" "$ARCTIC_PLIST_SRC" > "$ARCTIC_PLIST_TARGET"
-  launchctl unload "$ARCTIC_PLIST_TARGET" >/dev/null 2>&1 || true
-  launchctl load -w "$ARCTIC_PLIST_TARGET" 2>/dev/null || true
+  deploy_plist "$ARCTIC_PLIST_SRC" "$ARCTIC_PLIST_TARGET" "arctic-ko plist" || exit 1
   echo "✓ Arctic-ko launchd service loaded (port 8081)"
 fi
 
 # 4.5 hook 배포
+MEMORY_HOOK_DEPLOYED=0
 if [ -f "$MEMORY_HOOK_SRC" ]; then
-  cp "$MEMORY_HOOK_SRC" "$MEMORY_HOOK_TARGET"
-  chmod +x "$MEMORY_HOOK_TARGET"
-  echo "✓ memory-recall hook at $MEMORY_HOOK_TARGET"
+  if deploy_exec "$MEMORY_HOOK_SRC" "$MEMORY_HOOK_TARGET" "memory-recall hook"; then
+    manifest_record "hook" "$MEMORY_HOOK_TARGET"
+    echo "✓ memory-recall hook at $MEMORY_HOOK_TARGET"
+    MEMORY_HOOK_DEPLOYED=1
+  else
+    DEPLOY_FAILURES=$((DEPLOY_FAILURES+1))
+  fi
 fi
 
 # 4.6 헬스체크 (Arctic-ko 모델 로딩 대기 ~10초)
@@ -517,30 +694,62 @@ else
   echo "  diagnose: tail ~/Library/Logs/arctic-ko-mlx.err"
 fi
 
-# 4.7 settings.json UserPromptSubmit hook 등록 (idempotent, 기존 hook 보존)
-python3 - "$MEMORY_HOOK_TARGET" "$SETTINGS" <<'PY'
-import json, sys
+# 4.7 settings.json UserPromptSubmit hook 등록.
+# v3.2.3 (#4): hook 미배포 시 register skip (broken path 등록 차단).
+# v3.2.3 (#17): atomic write — tmp + JSON 재검증 + os.replace.
+# v3.2.3 (#19): stale memory-recall.py path entries 도 cleanup 후 새 target 등록 —
+# 옛 path 잔존 시 새 hook 등록이 막혔던 idempotency 결함 fix.
+if [ "$MEMORY_HOOK_DEPLOYED" = "1" ]; then
+  python3 - "$MEMORY_HOOK_TARGET" "$SETTINGS" <<'PY'
+import json, os, sys
 from pathlib import Path
 
 hook_cmd = sys.argv[1]
 settings_path = Path(sys.argv[2])
-data = json.loads(settings_path.read_text())
+
+try:
+    data = json.loads(settings_path.read_text())
+except (json.JSONDecodeError, OSError) as e:
+    bak = settings_path.with_suffix(settings_path.suffix + ".bak")
+    print(f"⚠️  {settings_path} invalid JSON ({e}). Try restore from {bak}.", file=sys.stderr)
+    if bak.exists():
+        data = json.loads(bak.read_text())
+        settings_path.write_text(bak.read_text())
+    else:
+        sys.exit(1)
+
 hooks = data.setdefault("hooks", {})
 ups = hooks.setdefault("UserPromptSubmit", [])
 
-new_hook = {
+# Stale memory-recall.py entries cleanup (SessionStart/SessionEnd 패턴 일관).
+cleaned = 0
+kept_events = []
+for entry in ups:
+    kept = [h for h in entry.get("hooks", [])
+            if "memory-recall.py" not in (h.get("command") or "")]
+    cleaned += len(entry.get("hooks", [])) - len(kept)
+    if kept:
+        entry["hooks"] = kept
+        kept_events.append(entry)
+if cleaned:
+    print(f"  removed {cleaned} stale memory-recall entries from UserPromptSubmit")
+kept_events.append({
     "matcher": "*",
     "hooks": [{"type": "command", "command": hook_cmd}],
-}
-# 동일 hook 이미 있으면 skip
-already = any("memory-recall.py" in json.dumps(h) for h in ups)
-if not already:
-    ups.append(new_hook)
-    settings_path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
-    print("✓ registered UserPromptSubmit hook (memory-recall)")
-else:
-    print("✓ UserPromptSubmit hook already present — skip")
+})
+hooks["UserPromptSubmit"] = kept_events
+print("✓ registered UserPromptSubmit hook (memory-recall)")
+
+# atomic write
+serialized = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+json.loads(serialized)
+tmp = settings_path.with_suffix(settings_path.suffix + ".tmp")
+tmp.write_text(serialized)
+os.replace(tmp, settings_path)
 PY
+else
+  echo "↷ UserPromptSubmit register skipped — memory-recall hook 미배포"
+fi
 
 # 4.8 초기 인덱싱 (모델 + health 둘 다 확보돼야 진행)
 if [ "$HEALTH_OK" = "1" ] && [ "$ARCTIC_MODEL_READY" = "1" ]; then
@@ -564,6 +773,15 @@ print(f'✓ indexed {n} memories')
 fi
 
 echo ""
-echo "Installation complete. Start a new Claude Code session to verify."
+# v3.2.3 (#16): deploy 실패 누적 시 명시 경고 — 옛 `|| true` 가 silent swallow 했던
+# 결함 fix. "Installation complete" 메시지를 사용자가 보고도 실제로는 skill 누락된
+# 상태였던 시나리오 차단.
+if [ "$DEPLOY_FAILURES" -gt 0 ]; then
+  echo "⚠️  Installation finished with $DEPLOY_FAILURES deploy failure(s)."
+  echo "   manifest: $INSTALL_MANIFEST"
+  echo "   원인 진단 후 ./install.sh 재실행 권장."
+else
+  echo "Installation complete. Start a new Claude Code session to verify."
+fi
 echo "Try: /recall <검색어>"
 echo "Uninstall: ./uninstall.sh"

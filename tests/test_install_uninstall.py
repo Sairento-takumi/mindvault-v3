@@ -142,9 +142,14 @@ class TestCloseSessionSkillDeploy(unittest.TestCase):
             self.assertIn(type_name, body, f"type '{type_name}' 누락")
 
     def test_skill_has_concurrency_guard(self):
-        """audit codex Medium 회귀 가드 — flock + atomic rename 가드 명시."""
+        """audit codex Medium 회귀 가드 — atomic mkdir lock + atomic rename 가드 명시.
+
+        v3.2.3 (#14): flock 은 macOS 기본 미포함이라 silent skip 됐던 결함을
+        mkdir-atomic 패턴으로 교체. 본문에 "flock" 은 옛 패턴 설명용으로 등장.
+        """
         body = (self.repo / "skill" / "close-session.md").read_text()
-        self.assertIn("flock", body, "동시성 lock 가드 누락")
+        self.assertIn("mkdir", body, "atomic mkdir lock 가드 누락")
+        self.assertIn("LOCK_DIR", body, "lock 디렉토리 변수 누락")
         self.assertIn("mktemp", body, "atomic rename pattern 누락")
 
     def test_skill_has_slug_sanitize(self):
@@ -172,10 +177,14 @@ class TestCloseSessionSkillDeploy(unittest.TestCase):
         self.assertIn("xargs -0", body, "xargs -0 누락")
 
     def test_skill_has_lock_cleanup(self):
-        """codex round-2 N1 가드 — lock fd 해제 + lock 파일 정리 (trap)."""
+        """codex round-2 N1 가드 — lock 디렉토리 정리 (trap).
+
+        v3.2.3 (#14): flock+`rm -f $LOCK_FILE` → mkdir-atomic+`rmdir $LOCK_DIR`.
+        디렉토리 자체가 lock 상태라 EXIT trap 에서 반드시 제거.
+        """
         body = (self.repo / "skill" / "close-session.md").read_text()
         self.assertIn("trap", body, "trap (EXIT) lock cleanup 누락")
-        self.assertIn('rm -f "$LOCK_FILE"', body, "lock 파일 정리 누락")
+        self.assertIn('rmdir "$LOCK_DIR"', body, "lock 디렉토리 정리 누락")
 
     def test_skill_detects_slug_race(self):
         """codex round-2 N2 가드 — 같은 슬러그 race 시 silent loss 안 함."""
@@ -287,11 +296,20 @@ class TestV3_1_1PostShipFixes(unittest.TestCase):
         self.assertIn("기존 메모리에 비슷한 주제가 있으면 그 slug 재사용", body,
                       "slug consistency 강화 누락")
 
-    def test_alt_mode_mtime_tracking_specified(self):
-        """codex round-6 E 가드 — Edit/Write alt mode 의 mtime tracking spec 명시."""
+    def test_edit_write_tools_excluded(self):
+        """v3.2.3 (#24) — Edit/Write 도구는 allowed-tools 에서 제외.
+
+        옛 codex round-6 E 의 INITIAL_MTIME alt mode 는 Edit/Write 가 lock 우회하는
+        race 위험을 완화하기 위한 차선책이었는데, v3.2.3 에서 Edit/Write 자체를
+        제거 (#24) 하면서 alt mode 도 불필요해짐. 대신 frontmatter 에서 두 tool
+        부재를 검증.
+        """
         body = (self.repo / "skill" / "close-session.md").read_text()
-        self.assertIn("INITIAL_MTIME", body, "mtime tracking spec 누락")
-        self.assertIn("CURRENT_MTIME", body, "race 검출 비교 spec 누락")
+        # frontmatter 영역 (--- 두 번 사이) 만 검사 — 본문 안 "Edit/Write" 설명 허용
+        head = body.split("---", 2)[1]
+        # tool 항목으로 등록되지 않아야 함
+        self.assertNotIn("- Edit", head, "Edit 가 allowed-tools 에 잔존")
+        self.assertNotIn("- Write", head, "Write 가 allowed-tools 에 잔존")
 
     def test_cs_warns_on_stale_content(self):
         """codex round-6 F 가드 — cs.md 가 stale content 가능성 안내."""
@@ -332,6 +350,180 @@ class TestUninstallV320(unittest.TestCase):
         self.assertEqual(r.returncode, 0, msg=r.stderr.decode())
         self.assertFalse(self.plist.exists())
         self.assertFalse(self.cache.exists())
+
+
+class TestV3_2_3FixSweep(unittest.TestCase):
+    """v3.2.3 — 26건 fix sweep 회귀 가드.
+
+    fresh 사용자 fatal (#1 Python 3.10 절대경로, #13 LaunchAgents mkdir 누락),
+    data loss 위험 (#4 SessionEnd broken register, #15 personal SKILL 미복원,
+    #17 settings.json non-atomic), race 가드 (#14 flock macOS 부재) 등 26건.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.repo = Path(__file__).resolve().parent.parent
+
+    # ── fresh-install fatal 가드 (#1, #2, #3, #6, #13) ────────────────────
+
+    def test_arctic_runner_wrapper_exists(self):
+        """#1 #6 — Arctic-ko 도 Gemma 처럼 wrapper 로 Python resolve."""
+        runner = self.repo / "scripts" / "arctic_ko_server_runner.sh"
+        self.assertTrue(runner.exists(), "arctic_ko_server_runner.sh 누락")
+        body = runner.read_text()
+        # 절대경로 Python 박힘 차단
+        self.assertNotIn("/Library/Frameworks/Python.framework", body,
+                         "wrapper 안에 Python 3.10 절대경로 잔존")
+        # 가변 PATH 로 resolve
+        self.assertIn("export PATH", body, "PATH 자동 보완 누락")
+
+    def test_arctic_plist_uses_mindvault_namespace(self):
+        """#2 — Arctic-ko plist 가 com.mindvault.* 로 sanitize."""
+        new_plist = self.repo / "plist" / "com.mindvault.arctic-ko-mlx.plist"
+        self.assertTrue(new_plist.exists(), "com.mindvault.arctic-ko-mlx.plist 누락")
+        body = new_plist.read_text()
+        # personal namespace 잔존 차단
+        self.assertNotIn("yonghaekim", body, "plist Label 에 personal namespace 잔존")
+        self.assertIn("com.mindvault.arctic-ko-mlx", body, "Label sanitize 누락")
+        # Python 절대경로 박힘 차단 (#1)
+        self.assertNotIn("/Library/Frameworks/Python.framework", body,
+                         "plist 안에 Python 3.10 절대경로 잔존")
+        # wrapper 호출
+        self.assertIn("arctic_ko_server_runner.sh", body, "runner wrapper 호출 누락")
+
+    def test_install_migrates_legacy_arctic_plist(self):
+        """#3 — install.sh 가 옛 com.yonghaekim.arctic-ko-mlx 도 cleanup."""
+        sh = (self.repo / "install.sh").read_text()
+        self.assertIn("com.yonghaekim.arctic-ko-mlx", sh,
+                      "옛 yonghaekim arctic-ko plist legacy migration 누락")
+        self.assertIn("LEGACY_LAUNCHD_LABELS", sh, "legacy label 배열 누락")
+
+    def test_install_creates_launch_agents_dir(self):
+        """#13 — fresh macOS 사용자는 ~/Library/LaunchAgents 부재 가능.
+        첫 plist deploy 전 mkdir -p 필요.
+        """
+        sh = (self.repo / "install.sh").read_text()
+        self.assertIn('mkdir -p "$GEMMA_LAUNCH_AGENTS"', sh,
+                      "LaunchAgents 디렉토리 자동 생성 누락")
+
+    # ── HIGH UX 가드 (#4, #5) ─────────────────────────────────────────
+
+    def test_install_guards_session_end_register(self):
+        """#4 — SessionEnd wrapper 미배포 시 register skip (broken path 등록 차단)."""
+        sh = (self.repo / "install.sh").read_text()
+        self.assertIn("END_WRAPPER_DEPLOYED", sh, "wrapper 배포 상태 추적 누락")
+        # cmd empty 면 register skip
+        self.assertIn("register skip", sh, "broken path register 차단 안내 누락")
+
+    def test_install_arctic_ready_uses_file_check(self):
+        """#5 — ARCTIC_MODEL_READY 는 step file 대신 model.safetensors 존재로."""
+        sh = (self.repo / "install.sh").read_text()
+        # 직접 파일 검증 패턴
+        self.assertIn('[ -f "$ARCTIC_TARGET/model.safetensors" ]', sh,
+                      "model.safetensors 존재 검증 누락")
+        # 검증 후 ARCTIC_MODEL_READY=1
+        self.assertIn("ARCTIC_MODEL_READY=1", sh, "모델 검증 후 ready flag 설정 누락")
+
+    # ── MEDIUM 가드 (#14, #15, #16, #17, #18, #19, #20, #21, #24) ─────
+
+    def test_skill_uses_atomic_mkdir_lock(self):
+        """#14 — flock 의존성 0, macOS-native mkdir-atomic lock."""
+        body = (self.repo / "skill" / "close-session.md").read_text()
+        self.assertIn('mkdir "$LOCK_DIR"', body, "atomic mkdir lock 패턴 누락")
+        self.assertIn("LOCK_DIR", body, "lock 디렉토리 변수 누락")
+        # rmdir trap cleanup
+        self.assertIn('rmdir "$LOCK_DIR"', body, "rmdir trap cleanup 누락")
+
+    def test_install_records_displaced_personal_skill(self):
+        """#15 — install 이 personal SKILL displace 시 manifest 기록."""
+        sh = (self.repo / "install.sh").read_text()
+        self.assertIn("personal_skill_displaced", sh,
+                      "manifest displace 기록 누락")
+        self.assertIn("INSTALL_MANIFEST", sh, "install manifest 변수 누락")
+
+    def test_uninstall_restores_displaced_personal_skill(self):
+        """#15 — uninstall 이 manifest 보고 personal SKILL 복원."""
+        sh = (self.repo / "uninstall.sh").read_text()
+        self.assertIn("personal_skill_displaced", sh,
+                      "uninstall 의 manifest restore 패턴 누락")
+        self.assertIn("INSTALL_MANIFEST", sh, "manifest 변수 누락")
+
+    def test_install_skill_deploy_no_silent_swallow(self):
+        """#16 — `|| true` 가 skill cp 실패 swallow 했던 결함 fix.
+        실패 누적 후 끝에서 alarm.
+        """
+        sh = (self.repo / "install.sh").read_text()
+        self.assertIn("DEPLOY_FAILURES", sh, "deploy 실패 누적 변수 누락")
+        # 끝에서 명시 경고
+        self.assertIn("deploy failure", sh, "deploy 실패 종합 경고 누락")
+
+    def test_install_settings_atomic_write(self):
+        """#17 — settings.json 쓰기는 atomic (tmp + os.replace)."""
+        sh = (self.repo / "install.sh").read_text()
+        # round-trip 검증 + os.replace 패턴
+        self.assertIn("os.replace", sh, "atomic os.replace 누락")
+        self.assertIn("json.loads(serialized)", sh, "JSON 재검증 누락")
+
+    def test_install_plist_loaded_always_refresh(self):
+        """#18 — plist-loaded step 은 cheap step. content drift 차단 위해 항상 refresh."""
+        sh = (self.repo / "install.sh").read_text()
+        # step entry 정리 후 재기록
+        self.assertIn('grep -v "^plist-loaded$"', sh,
+                      "plist-loaded step 정리 후 재기록 누락")
+
+    def test_install_ups_register_cleanup(self):
+        """#19 — UserPromptSubmit 도 SessionStart/End 같은 cleanup-then-register 패턴."""
+        sh = (self.repo / "install.sh").read_text()
+        # stale memory-recall.py 도 cleanup
+        self.assertIn("stale memory-recall entries", sh,
+                      "UPS stale entries cleanup 누락")
+
+    def test_skill_validates_basename_memory(self):
+        """#20 — _validate_mem_dir 가 basename 'memory' 정확 매칭."""
+        body = (self.repo / "skill" / "close-session.md").read_text()
+        self.assertIn('"$(basename "$abs")" = "memory"', body,
+                      "basename memory 검증 누락")
+
+    def test_skill_dry_run_exact_token_match(self):
+        """#21 — --dry-run 은 shell-like token exact match (substring 아님)."""
+        body = (self.repo / "skill" / "close-session.md").read_text()
+        # 본문에 token 정확 매칭 안내
+        self.assertIn("token 으로 정확 매칭", body, "exact token match 명시 누락")
+
+    def test_skill_allowed_tools_excludes_edit_write(self):
+        """#24 — Edit/Write 는 race 우회 위험으로 allowed-tools 에서 제외."""
+        body = (self.repo / "skill" / "close-session.md").read_text()
+        head = body.split("---", 2)[1]
+        self.assertNotIn("- Edit", head, "Edit 가 allowed-tools 에 잔존")
+        self.assertNotIn("- Write", head, "Write 가 allowed-tools 에 잔존")
+        # cs.md alias 도 동일
+        cs_body = (self.repo / "skill" / "cs.md").read_text()
+        cs_head = cs_body.split("---", 2)[1]
+        self.assertNotIn("- Edit", cs_head, "cs.md Edit 잔존")
+        self.assertNotIn("- Write", cs_head, "cs.md Write 잔존")
+
+    # ── Documentation drift 가드 (#23, #25, #26) ──────────────────────
+
+    def test_readme_uninstall_list_includes_gemma(self):
+        """#26 — README uninstall 섹션이 com.mindvault.gemma-mlx 명시."""
+        body = (self.repo / "README.md").read_text()
+        # 어디든 com.mindvault.gemma-mlx 가 uninstall 컨텍스트로 등장
+        idx = body.find("uninstall")
+        self.assertTrue(idx >= 0, "uninstall 섹션 부재")
+        # 그 이후 본문에 gemma plist label 등장
+        self.assertIn("com.mindvault.gemma-mlx", body[idx:],
+                      "uninstall list 에 Gemma plist label 누락")
+
+    def test_readme_memory_review_no_phantom_subcommands(self):
+        """#23 — README 가 /memory_review 의 가상 subcommand (diff/approve/discard)
+        를 더 이상 명시하지 않음. 실제 skill 은 인터랙티브 listing 만.
+        """
+        body = (self.repo / "README.md").read_text()
+        # subcommand 형식이 본문에서 빠졌는지 확인 (`/memory_review approve <slug>` 같은)
+        self.assertNotIn("/memory_review approve <slug>", body,
+                         "phantom subcommand 잔존")
+        self.assertNotIn("/memory_review discard <slug>", body,
+                         "phantom subcommand 잔존")
 
 
 if __name__ == "__main__":

@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # MindVault v3 uninstaller — removes hooks, scripts, launchd services, and skill registrations.
+# v3.2.3: personal SKILL manifest restore (#15), MV3_SCRIPTS_DIR 존중 (#22),
+#         settings.json atomic write (#17), LAUNCHD_LABELS 정리 (#3).
 
 set -euo pipefail
 
 HOOKS_DIR="$HOME/.claude/hooks"
 SETTINGS="$HOME/.claude/settings.json"
+INSTALL_MANIFEST="$HOME/.claude/mindvault-v3/.install-manifest"
 
 # v3.2.0 — Gemma plist + cache 정리.
 # launchd 에서 com.mindvault.gemma-mlx 만 정리 (다른 사용자 이름의 gemma-mlx
@@ -43,25 +46,44 @@ HOOK_TARGETS=(
   "$HOOKS_DIR/memory-recall.py"
 )
 
-# Launchd labels MindVault v3 owns. gemma-mlx is intentionally NOT in this list —
-# it is shared infrastructure used outside mindvault.
+# v3.2.3 (#3) — Launchd labels MindVault v3 가 install 단계에서 deploy 하는 것만.
+# gemma-mlx (com.mindvault.gemma-mlx) 는 remove_gemma_assets() 에서 별도 처리.
+# 옛 com.yonghaekim.* legacy 도 동시 cleanup — install.sh 의 LEGACY_LAUNCHD_LABELS
+# 와 동일 list 유지.
 LAUNCHD_LABELS=(
+  "com.mindvault.arctic-ko-mlx"
+)
+LEGACY_LAUNCHD_LABELS=(
   "com.yonghaekim.arctic-ko-mlx"
+  "com.yonghaekim.bge-m3-mlx"
   "com.yonghaekim.mv3-env"
   "com.yonghaekim.mv3-gemma-intent"
   "com.yonghaekim.mv3-stats-daily"
 )
 
 # --- 1. settings.json hook entries ----------------------------------------
+# v3.2.3 (#17): atomic write — tmp + JSON round-trip 검증 + os.replace.
+# JSON parse 실패 시 .bak 에서 자동 복원.
 if [ -f "$SETTINGS" ]; then
   cp "$SETTINGS" "$SETTINGS.bak"
   python3 - "$SETTINGS" "${HOOK_TARGETS[@]}" <<'PY'
-import json, sys
+import json, os, sys
 from pathlib import Path
 
 path = Path(sys.argv[1])
 targets = sys.argv[2:]
-data = json.loads(path.read_text()) if path.stat().st_size else {}
+
+try:
+    data = json.loads(path.read_text()) if path.stat().st_size else {}
+except (json.JSONDecodeError, OSError) as e:
+    bak = path.with_suffix(path.suffix + ".bak")
+    print(f"⚠️  {path} invalid JSON ({e}). Attempting restore from {bak}.", file=sys.stderr)
+    if bak.exists():
+        data = json.loads(bak.read_text())
+        path.write_text(bak.read_text())
+    else:
+        sys.exit(1)
+
 hooks = data.get("hooks", {})
 
 
@@ -84,7 +106,11 @@ for event_name in ("SessionStart", "SessionEnd", "UserPromptSubmit", "Stop"):
     elif event_name in hooks:
         del hooks[event_name]
 
-path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+serialized = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+json.loads(serialized)
+tmp = path.with_suffix(path.suffix + ".tmp")
+tmp.write_text(serialized)
+os.replace(tmp, path)
 print(f"✓ removed {removed} hook entries from settings.json")
 PY
 fi
@@ -126,16 +152,55 @@ for skill in close-session cs; do
   fi
 done
 
+# v3.2.3 (#15) — personal SKILL manifest restore.
+# install 시 ~/.claude/skills/{close-session,cs} 가 v3 변형이 아닌 사용자 personal
+# 본이었으면 ~/.claude/skills.attic/mv3-skill-conflict-*/ 로 displace 됐다. 이를
+# manifest 의 personal_skill_displaced 항목 보고 자동 복원.
+if [ -f "$INSTALL_MANIFEST" ]; then
+  restored=0
+  while IFS= read -r line; do
+    case "$line" in
+      personal_skill_displaced=*)
+        mapping="${line#personal_skill_displaced=}"
+        # original_path=>backup_path 형식. malformed 라인 (=> 없음) 은 skip.
+        case "$mapping" in
+          *=\>*) ;;
+          *)
+            echo "↷ skip malformed manifest entry: $line" >&2
+            continue
+            ;;
+        esac
+        original="${mapping%%=>*}"
+        backup="${mapping#*=>}"
+        if [ -d "$backup" ] && [ ! -e "$original" ]; then
+          parent_dir="$(dirname "$original")"
+          mkdir -p "$parent_dir"
+          mv "$backup" "$original"
+          restored=$((restored+1))
+          echo "✓ restored personal SKILL: $original (from $backup)"
+        elif [ -e "$original" ]; then
+          echo "↷ skip restore $original — 이미 존재 ($backup 는 수동 정리 필요)"
+        fi
+        ;;
+    esac
+  done < "$INSTALL_MANIFEST"
+  if [ "$restored" -gt 0 ]; then
+    echo "✓ restored $restored personal SKILL(s) from displace backup"
+  fi
+fi
+
 # --- 4. Deployed scripts directory ----------------------------------------
-SCRIPTS_DIR="$HOME/.claude/scripts/mindvault"
+# v3.2.3 (#22) — MV3_SCRIPTS_DIR override 존중. install 과 동일 변수 사용.
+SCRIPTS_DIR="${MV3_SCRIPTS_DIR:-$HOME/.claude/scripts/mindvault}"
 if [ -d "$SCRIPTS_DIR" ]; then
   rm -rf "$SCRIPTS_DIR"
   echo "✓ removed $SCRIPTS_DIR"
 fi
 
 # --- 5. Launchd services --------------------------------------------------
-for label in "${LAUNCHD_LABELS[@]}"; do
-  PLIST="$HOME/Library/LaunchAgents/${label}.plist"
+LAUNCH_AGENTS="${MV3_LAUNCH_AGENTS:-$HOME/Library/LaunchAgents}"
+for label in "${LAUNCHD_LABELS[@]}" "${LEGACY_LAUNCHD_LABELS[@]}"; do
+  PLIST="$LAUNCH_AGENTS/${label}.plist"
   if [ -f "$PLIST" ]; then
     launchctl unload "$PLIST" 2>/dev/null || true
     rm -f "$PLIST"
@@ -148,7 +213,14 @@ done
 # 다른 사용자 이름의 gemma-mlx (예: com.<user>.gemma-mlx) 는 보존.
 remove_gemma_assets
 
-# --- 6. Optional: drop memories_* tables (--purge-vec) --------------------
+# --- 6. Manifest cleanup --------------------------------------------------
+# v3.2.3: 모든 deploy 자산 cleanup 후 manifest 자체 제거 — uninstall 흔적 0.
+if [ -f "$INSTALL_MANIFEST" ]; then
+  rm -f "$INSTALL_MANIFEST"
+  echo "✓ removed $INSTALL_MANIFEST"
+fi
+
+# --- 7. Optional: drop memories_* tables (--purge-vec) --------------------
 if [ "${1:-}" = "--purge-vec" ]; then
   if [ -f "$HOME/.claude/mindvault-v3/index.db" ]; then
     sqlite3 "$HOME/.claude/mindvault-v3/index.db" \
