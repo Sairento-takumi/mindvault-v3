@@ -117,6 +117,22 @@ class TestPutGet(CacheTestBase):
         self.assertIsNone(self.ec.cache_get("p"))
 
 
+class TestNoDeadPragma(unittest.TestCase):
+    """audit-2026-05-25: PRAGMA journal_mode=WAL 은 DB 파일 속성이라
+    _ensure_db() 의 init 시점에 한 번이면 충분. cache_get/cache_put 안에서
+    매 호출마다 PRAGMA 재실행은 dead instruction (per-call ~0.05ms no-op).
+    회귀 시 같은 패턴이 다시 들어오지 않도록 source-level 가드."""
+
+    def test_pragma_wal_called_once_in_init_only(self):
+        src = (Path(__file__).resolve().parent.parent / "src" / "extractor_cache.py").read_text()
+        occurrences = src.count('PRAGMA journal_mode=WAL')
+        self.assertEqual(
+            occurrences, 1,
+            f"PRAGMA journal_mode=WAL 은 _ensure_db 1회만 — 현재 {occurrences}회 등장 "
+            f"(cache_get/cache_put 호출당 no-op 회귀)"
+        )
+
+
 class TestStats(CacheTestBase):
     def test_empty_stats(self):
         stats = self.ec.cache_stats()

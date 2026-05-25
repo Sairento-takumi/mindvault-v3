@@ -83,7 +83,6 @@ def cache_get(prompt: str) -> Optional[list[dict]]:
     h = prompt_hash(prompt)
     conn = sqlite3.connect(str(CACHE_DB), timeout=5.0)
     try:
-        conn.execute("PRAGMA journal_mode=WAL")
         row = conn.execute(
             "SELECT candidates_json FROM extractor_cache WHERE prompt_hash=?",
             (h,),
@@ -118,7 +117,6 @@ def cache_put(prompt: str, candidates: list[dict]) -> None:
     h = prompt_hash(prompt)
     conn = sqlite3.connect(str(CACHE_DB), timeout=5.0)
     try:
-        conn.execute("PRAGMA journal_mode=WAL")
         conn.execute(
             """
             INSERT OR REPLACE INTO extractor_cache
