@@ -87,5 +87,52 @@ class TestDoStep(unittest.TestCase):
         self.assertIn(b"huggingface_hub", r.stdout)
 
 
+class TestConvertArcticKo(unittest.TestCase):
+    """scripts/convert_arctic_ko.py 의 idempotent + cleanup-on-failure."""
+
+    CONVERT_SCRIPT = REPO_DIR / "scripts" / "convert_arctic_ko.py"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.model_dir = Path(self.tmp.name) / "arctic-ko"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _run(self, *extra_args, env_extra=None):
+        env = os.environ.copy()
+        env["MV3_CONVERT_DRY_RUN"] = env_extra.get("dry_run", "1") if env_extra else "1"
+        if env_extra:
+            for k, v in env_extra.items():
+                if k != "dry_run":
+                    env[k] = v
+        return subprocess.run(
+            [sys.executable, str(self.CONVERT_SCRIPT), "--target", str(self.model_dir), *extra_args],
+            capture_output=True, env=env,
+        )
+
+    def test_skip_if_model_exists(self):
+        """target/model.safetensors 이미 있으면 즉시 success exit."""
+        self.model_dir.mkdir(parents=True)
+        (self.model_dir / "model.safetensors").write_bytes(b"fake")
+        r = self._run()
+        self.assertEqual(r.returncode, 0)
+        self.assertIn(b"already present", r.stdout)
+
+    def test_dry_run_creates_marker(self):
+        """MV3_CONVERT_DRY_RUN=1 + 모델 없으면 marker 만 만들고 success."""
+        r = self._run()
+        self.assertEqual(r.returncode, 0)
+        self.assertTrue((self.model_dir / "model.safetensors").exists())
+
+    def test_partial_cleanup_on_failure(self):
+        """변환 도중 fail 시 model_dir 내부 정리 (corrupt 차단)."""
+        self.model_dir.mkdir(parents=True)
+        (self.model_dir / "partial.bin").write_bytes(b"partial")
+        r = self._run(env_extra={"dry_run": "1", "MV3_CONVERT_FAIL": "1"})
+        self.assertNotEqual(r.returncode, 0)
+        self.assertFalse((self.model_dir / "partial.bin").exists())
+
+
 if __name__ == "__main__":
     unittest.main()
