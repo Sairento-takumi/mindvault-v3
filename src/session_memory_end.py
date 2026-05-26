@@ -255,6 +255,23 @@ def main() -> int:
         )
         _debug(f"session {sid[:8]}: staged {written}/{len(candidates)}")
 
+        # NEXT-35 (2026-05-26): memories 테이블 자동 sync. NEXT-34 alias_index
+        # 자동 동기화의 짝꿍 단계 — alias_index 는 sync 되는데 그 위에 깔린
+        # memories/_fts/_vec 테이블은 install.sh 1회 실행 의존이라 새 .md 추가
+        # 후 stale 됐던 결함(v3.2.9 fix). incremental: mtime 비교로 변경·신규
+        # 만 처리, lock 못 잡으면 즉시 0 반환. alias_generator 보다 *먼저*
+        # 호출해야 memories 테이블 row 가 새로 들어간 상태에서 alias 생성.
+        try:
+            from memory_indexer import incremental_index as _index_memories
+            ic = _index_memories()
+            _debug(
+                f"index_sync updated={ic.get('updated', 0)} "
+                f"skipped={ic.get('skipped', 0)} "
+                f"removed={ic.get('removed', 0)}"
+            )
+        except Exception as e:
+            _debug(f"index_sync skipped: {type(e).__name__}: {e}")
+
         # NEXT-34 (2026-05-25): alias_index 자동 동기화. SessionEnd 가 이미
         # nohup detach 컨텍스트라 추가 비용 OK. Gemma 호출은 incremental —
         # 새 메모리 파일이 없으면 거의 즉시 끝. purge_missing 으로 삭제된
