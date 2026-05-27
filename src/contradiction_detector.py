@@ -1,10 +1,35 @@
 from __future__ import annotations
 
 import enum
+import json
 import os
+import re
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
+
+from src.memory_compiler import GEMMA_MODEL, GEMMA_TIMEOUT, GEMMA_URL
+
+
+_CLASSIFY_PROMPT = """다음은 메모리 시스템의 두 항목입니다.
+새 항목이 기존 항목과 충돌하는지 분류하세요.
+
+[기존 항목]
+{old}
+
+[새 항목]
+{new}
+
+분류 기준:
+- metric_update: 수치(%, 시간, 개수, 버전)가 갱신됨 (예: 65% → 66.3%)
+- decision_reversal: 결정이 뒤집힘 (예: "X 도입" → "X 폐기")
+- fact_correction: 사실이 정정됨 (예: "옛 표기 폐기" 류)
+- no_conflict: 충돌 없음 (주제 다름 또는 보완 관계)
+
+JSON만 출력. 다른 설명 없음:
+{{"kind": "<one of above>", "reason": "<한 문장>", "confidence": <0.0-1.0>}}"""
 
 
 def _debug(msg: str) -> None:
@@ -137,3 +162,75 @@ def _recall_candidates(
         return p.stem == own_stem_suffix or p.stem.endswith("_" + own_stem_suffix)
 
     return [(p, s) for p, s in results if not is_self(p)]
+
+
+def _call_gemma_for_classify(prompt: str, max_tokens: int = 400) -> str | None:
+    """Gemma 4 E4B 호출. 실패 시 None (silent, _debug 로깅).
+
+    BaseException 은 통과시킴 (sentinel pattern, hook hard-budget 호환).
+    """
+    body = json.dumps({
+        "model": GEMMA_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": max_tokens,
+        "temperature": 0.0,
+    }).encode()
+    req = urllib.request.Request(
+        GEMMA_URL,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=GEMMA_TIMEOUT) as resp:
+            data = json.loads(resp.read())
+    except (urllib.error.URLError, json.JSONDecodeError, OSError, TimeoutError) as e:
+        _debug(f"gemma classify fail: {type(e).__name__}: {e}")
+        return None
+
+    choices = data.get("choices") or []
+    if not choices:
+        return None
+    content = (choices[0].get("message") or {}).get("content") or ""
+    return content.strip() or None
+
+
+def _strip_code_fences(text: str) -> str:
+    """```json\\n{...}\\n``` 같은 마크다운 fence 제거."""
+    text = text.strip()
+    m = re.match(r"^```(?:json)?\s*\n(.*?)\n```\s*$", text, re.DOTALL)
+    return m.group(1) if m else text
+
+
+def _classify_pair(new_body: str, old_body: str) -> dict | None:
+    """두 body 비교 후 {'kind', 'reason', 'confidence'} 반환. failure → None.
+
+    body 는 1500자까지만 prompt 에 포함 (Gemma 4K context 여유).
+    """
+    prompt = _CLASSIFY_PROMPT.format(old=old_body[:1500], new=new_body[:1500])
+    raw = _call_gemma_for_classify(prompt)
+    if not raw:
+        return None
+
+    raw = _strip_code_fences(raw)
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+
+    if not isinstance(parsed, dict):
+        return None
+
+    valid_kinds = {k.value for k in ContradictionKind}
+    if parsed.get("kind") not in valid_kinds:
+        return None
+
+    parsed.setdefault("confidence", 0.5)
+    parsed.setdefault("reason", "")
+
+    try:
+        parsed["confidence"] = float(parsed["confidence"])
+    except (TypeError, ValueError):
+        parsed["confidence"] = 0.5
+
+    return parsed

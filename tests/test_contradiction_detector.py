@@ -111,3 +111,50 @@ def test_hybrid_search_logs_debug_on_recall_failure(tmp_path, monkeypatch):
     contents = log.read_text(encoding="utf-8")
     assert "recall_memory failed" in contents
     assert "simulated DB down" in contents
+
+
+def test_classify_metric_update(monkeypatch):
+    from src.contradiction_detector import _classify_pair
+    monkeypatch.setattr(
+        "src.contradiction_detector._call_gemma_for_classify",
+        lambda p, max_tokens=400: '{"kind": "metric_update", "reason": "65% → 66.3%", "confidence": 0.92}',
+    )
+    result = _classify_pair("hit rate 66.3% (n=3,193)", "hit rate 65% (n=2,397)")
+    assert result["kind"] == "metric_update"
+    assert result["confidence"] >= 0.8
+
+
+def test_classify_no_conflict_unrelated(monkeypatch):
+    from src.contradiction_detector import _classify_pair
+    monkeypatch.setattr(
+        "src.contradiction_detector._call_gemma_for_classify",
+        lambda p, max_tokens=400: '{"kind": "no_conflict", "reason": "주제 다름", "confidence": 0.95}',
+    )
+    assert _classify_pair("python tip", "scanner CLI")["kind"] == "no_conflict"
+
+
+def test_classify_handles_gemma_failure(monkeypatch):
+    from src.contradiction_detector import _classify_pair
+    monkeypatch.setattr(
+        "src.contradiction_detector._call_gemma_for_classify",
+        lambda p, max_tokens=400: None,
+    )
+    assert _classify_pair("a", "b") is None
+
+
+def test_classify_handles_malformed_json(monkeypatch):
+    from src.contradiction_detector import _classify_pair
+    monkeypatch.setattr(
+        "src.contradiction_detector._call_gemma_for_classify",
+        lambda p, max_tokens=400: "not json {{",
+    )
+    assert _classify_pair("a", "b") is None
+
+
+def test_classify_strips_code_fences(monkeypatch):
+    from src.contradiction_detector import _classify_pair
+    monkeypatch.setattr(
+        "src.contradiction_detector._call_gemma_for_classify",
+        lambda p, max_tokens=400: '```json\n{"kind": "fact_correction", "reason": "r", "confidence": 0.8}\n```',
+    )
+    assert _classify_pair("a", "b")["kind"] == "fact_correction"
