@@ -187,13 +187,19 @@ class TestHookNormalFlow(unittest.TestCase):
             timeout=5,
         )
         self.assertEqual(r.returncode, 0)
-        # threshold 통과한 결과가 있으면 system-reminder 포맷 (NEXT-37 Phase 2)
-        if r.stdout.strip():
-            out = r.stdout.decode()
-            self.assertIn("<system-reminder>", out)
-            self.assertIn("MEMORY CONTEXT (", out)
-            self.assertIn("회수 노트:", out)
-            self.assertIn("</system-reminder>", out)
+        # Round 4 fix: vacuous pass 차단 — silent pass 대신 skipTest 명시.
+        # threshold 통과 결과 없으면 format assertion 자체 의미 없음 → skip
+        # 으로 가시화. codex 발견 (Round 4 final verdict scope).
+        out = r.stdout.decode()
+        if not out.strip():
+            self.skipTest(
+                "integration: live recall returned no result for sample prompt "
+                "— format assertion skipped (vacuous pass 차단)"
+            )
+        self.assertIn("<system-reminder>", out)
+        self.assertIn("MEMORY CONTEXT (", out)
+        self.assertIn("회수 노트:", out)
+        self.assertIn("</system-reminder>", out)
 
 
 class TestFormatOutputSanitize(unittest.TestCase):
