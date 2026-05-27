@@ -46,3 +46,68 @@ def test_recall_candidates_excludes_self_slug(tmp_path, write_memory, monkeypatc
     paths = [p for p, _ in found]
     assert own not in paths
     assert other in paths
+
+
+def test_recall_candidates_excludes_self_by_explicit_path(tmp_path, write_memory, monkeypatch):
+    """When candidate carries 'path', exclude by path identity (most reliable)."""
+    from src.contradiction_detector import _recall_candidates
+
+    own = write_memory(tmp_path, "feedback_new_metric.md",
+                       "name: new-metric\ntype: feedback", "hit 66.3%")
+    other = write_memory(tmp_path, "feedback_old_metric.md",
+                         "name: old-metric\ntype: feedback", "hit 65%")
+
+    monkeypatch.setattr(
+        "src.contradiction_detector._hybrid_search",
+        lambda q, m, top_k: [(own, 0.95), (other, 0.85)],
+    )
+
+    # Note: slug="new-metric" but stem is "feedback_new_metric" (type prefix).
+    # The current stem-only logic would FAIL to exclude own. Path identity catches it.
+    candidate = {"slug": "new-metric", "title": "회수율", "body": "hit 66.3%",
+                 "path": own}
+    found = _recall_candidates(candidate, tmp_path)
+    paths = [p for p, _ in found]
+    assert own not in paths
+    assert other in paths
+
+
+def test_recall_candidates_fallback_stem_suffix_match(tmp_path, write_memory, monkeypatch):
+    """When no 'path' in candidate, fall back to stem suffix match (handles <type>_<slug>)."""
+    from src.contradiction_detector import _recall_candidates
+
+    own = write_memory(tmp_path, "procedural_my_thing.md",
+                       "name: my-thing\ntype: procedural", "body")
+    other = write_memory(tmp_path, "feedback_other.md",
+                         "name: other\ntype: feedback", "body")
+
+    monkeypatch.setattr(
+        "src.contradiction_detector._hybrid_search",
+        lambda q, m, top_k: [(own, 0.95), (other, 0.85)],
+    )
+
+    candidate = {"slug": "my-thing", "title": "t", "body": "b"}  # no "path"
+    found = _recall_candidates(candidate, tmp_path)
+    paths = [p for p, _ in found]
+    assert own not in paths, f"stem suffix match failed: own={own.stem} should match slug=my-thing"
+    assert other in paths
+
+
+def test_hybrid_search_logs_debug_on_recall_failure(tmp_path, monkeypatch):
+    """recall_memory raising → _debug log + return [] (no propagation)."""
+    from src.contradiction_detector import _hybrid_search
+
+    monkeypatch.setenv("MV3_RUNTIME_DIR", str(tmp_path))
+
+    def boom(query, top_k):
+        raise RuntimeError("simulated DB down")
+    monkeypatch.setattr("src.memory_search.recall_memory", boom)
+
+    result = _hybrid_search("any query", tmp_path)
+    assert result == []
+
+    log = tmp_path / "debug.log"
+    assert log.exists()
+    contents = log.read_text(encoding="utf-8")
+    assert "recall_memory failed" in contents
+    assert "simulated DB down" in contents
