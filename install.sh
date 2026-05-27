@@ -678,6 +678,8 @@ fi
 #  - Sprint 16+: sources_cli (영구 source 등록), backfill_cli (vec 백필),
 #                dedup_cli (중복 정리), extractor_stats_cli (관측)
 #  - NEXT-31~33: alias_generator (alias_index 자산 생성)
+#  - v3.4 Layer 5 (T10): contradiction_detector (session-memory-end import),
+#                        contradiction_review_cli (사용자 review CLI)
 RUNTIME_EXTRA_SRC=(
   "$REPO_DIR/src/query_intent.py"
   "$REPO_DIR/src/extractor_cache.py"
@@ -688,6 +690,8 @@ RUNTIME_EXTRA_SRC=(
   "$REPO_DIR/src/dedup_cli.py"
   "$REPO_DIR/src/extractor_stats_cli.py"
   "$REPO_DIR/src/alias_generator.py"
+  "$REPO_DIR/src/contradiction_detector.py"
+  "$REPO_DIR/src/contradiction_review_cli.py"
 )
 for f in "${RUNTIME_EXTRA_SRC[@]}"; do
   if [ -f "$f" ]; then

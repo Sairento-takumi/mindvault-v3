@@ -574,5 +574,42 @@ class TestV3_2_4PythonBinResolve(unittest.TestCase):
                       "install python3 bin dir 자동 추출 패턴 누락")
 
 
+class TestV34ContradictionDeploy(unittest.TestCase):
+    """v3.4 Layer 5 T10 회귀 가드 — install.sh 가 contradiction modules 를 deploy 하는지.
+
+    T5 의 session_memory_end.py 가 `from contradiction_detector import ...` 를
+    runtime 에 import. install.sh 가 이 모듈을 deploy 하지 않으면 hook 이
+    silent ModuleNotFoundError (broad except 안에서 묻힘) → Layer 5 무동작.
+    """
+
+    def setUp(self):
+        self.repo = Path(__file__).resolve().parent.parent
+
+    def test_install_sh_deploys_contradiction_modules(self):
+        """install.sh must deploy contradiction_detector.py and contradiction_review_cli.py."""
+        install_sh = self.repo / "install.sh"
+        content = install_sh.read_text(encoding="utf-8")
+        # Either explicit list mention OR wildcard pattern that catches them
+        has_detector = (
+            "contradiction_detector.py" in content
+            or "src/*.py" in content
+            or "cp -r src" in content
+            or "cp src/" in content  # any cp of src/ would catch them
+        )
+        has_review_cli = (
+            "contradiction_review_cli.py" in content
+            or "src/*.py" in content
+            or "cp -r src" in content
+            or "cp src/" in content
+        )
+        self.assertTrue(has_detector, "install.sh must deploy contradiction_detector.py")
+        self.assertTrue(has_review_cli, "install.sh must deploy contradiction_review_cli.py")
+
+    def test_contradiction_source_files_exist(self):
+        """repo 에 src/contradiction_detector.py + src/contradiction_review_cli.py 존재."""
+        self.assertTrue((self.repo / "src" / "contradiction_detector.py").exists())
+        self.assertTrue((self.repo / "src" / "contradiction_review_cli.py").exists())
+
+
 if __name__ == "__main__":
     unittest.main()
