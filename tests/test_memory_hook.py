@@ -187,11 +187,12 @@ class TestHookNormalFlow(unittest.TestCase):
             timeout=5,
         )
         self.assertEqual(r.returncode, 0)
-        # threshold 통과한 결과가 있으면 system-reminder 포맷
+        # threshold 통과한 결과가 있으면 system-reminder 포맷 (NEXT-37 Phase 2)
         if r.stdout.strip():
             out = r.stdout.decode()
             self.assertIn("<system-reminder>", out)
-            self.assertIn("메모리 회수 (Layer 4 hybrid)", out)
+            self.assertIn("MEMORY CONTEXT (", out)
+            self.assertIn("회수 노트:", out)
             self.assertIn("</system-reminder>", out)
 
 

@@ -846,7 +846,8 @@ class TestRecallUtilizationEndToEnd(unittest.TestCase):
 class TestExtractRecalledIdsFromHookInjection(unittest.TestCase):
     """NEXT-37 Phase 1B retroactive — system-reminder hook injection 파싱."""
 
-    def test_extracts_multi_ids(self):
+    def test_extracts_multi_ids_legacy_format(self):
+        """Phase 2 이전 format — # 메모리 회수 + **name** 패턴."""
         from self_eval import extract_recalled_ids_from_hook_injection
         text = (
             "<system-reminder>\n"
@@ -854,6 +855,23 @@ class TestExtractRecalledIdsFromHookInjection(unittest.TestCase):
             "- **project-mindvault** (score 0.95, vec+fts) — MindVault v3\n"
             "  발췌: 어떤 단락\n"
             "- **feedback-x** (score 0.62, vec) — 다른 메모\n"
+            "</system-reminder>"
+        )
+        out = extract_recalled_ids_from_hook_injection(text)
+        self.assertEqual(out, ["project-mindvault", "feedback-x"])
+
+    def test_extracts_multi_ids_new_format(self):
+        """NEXT-37 Phase 2 신규 format — MEMORY CONTEXT + [name] 패턴."""
+        from self_eval import extract_recalled_ids_from_hook_injection
+        text = (
+            "<system-reminder>\n"
+            "MEMORY CONTEXT (다음 fact 를 본 답변 reasoning 에 반드시 통합):\n"
+            "\n"
+            "- [project-mindvault] (score 0.95, vec+fts) — MindVault v3\n"
+            "  발췌: 어떤 단락\n"
+            "- [feedback-x] (score 0.62, vec) — 다른 메모\n"
+            "\n"
+            "답변 시작 전 한 줄로 \"회수 노트: ...\" 명시 출력 의무.\n"
             "</system-reminder>"
         )
         out = extract_recalled_ids_from_hook_injection(text)

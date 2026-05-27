@@ -273,16 +273,37 @@ def _sanitize(text: str) -> str:
 
 
 def _format_output(results: list[dict]) -> str:
-    lines = ["<system-reminder>", "# 메모리 회수 (Layer 4 hybrid)"]
+    """NEXT-37 Phase 2 (Step 2) — Zep "MEMORY CONTEXT:" 라벨 + Chain-of-Note
+    self-report 강제 prompt.
+
+    배경 (3-agent 자료조사 수렴): 회수된 메모리를 LLM 답변에 강제 통합하는
+    유일한 검증된 메커니즘 = "답변에 활용 흔적을 explicit 출력하라"는
+    contract. Zep production 검증 포맷 + Chain-of-Note EM +7.9 효과 + Cursor
+    positive instruction 패턴 결합.
+
+    옛 format ("# 메모리 회수 (Layer 4 hybrid)") 은 self_eval.py 의
+    RECALL_INJECTION_HEADERS 가 backward compat 으로 retroactive 분석 보존.
+    """
+    lines = [
+        "<system-reminder>",
+        "MEMORY CONTEXT (다음 fact 를 본 답변 reasoning 에 반드시 통합):",
+        "",
+    ]
     for r in results:
         srcs = "+".join(r.get("source") or [])
         name = _sanitize(r.get("name") or "(unnamed)")
         desc = _sanitize(r.get("description") or "")
         snippet = _sanitize(r.get("snippet") or "")
         score = r.get("score", 0)
-        lines.append(f"- **{name}** (score {score:.2f}, {srcs}) — {desc}")
+        lines.append(f"- [{name}] (score {score:.2f}, {srcs}) — {desc}")
         if snippet:
             lines.append(f"  발췌: {snippet}")
+    lines.append("")
+    lines.append(
+        "답변 시작 전 한 줄로 \"회수 노트: <위 메모리가 본 질문과 어떻게 "
+        "관련되는가, 무관하면 '무관'>\" 명시 출력 의무. 회수 fact 와 답변이 "
+        "모순되면 즉시 표기."
+    )
     lines.append("</system-reminder>")
     return "\n".join(lines) + "\n"
 

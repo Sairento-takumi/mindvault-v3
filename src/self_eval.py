@@ -56,12 +56,20 @@ SELF_AFFIRMING_MIN_HITS = 2
 RECALL_MARKER_RE = re.compile(r"→\s*메모리\s*회수[::]", re.IGNORECASE)
 
 # NEXT-37 Phase 1B retroactive — hook (hooks/memory-recall.py:_format_output)
-# 가 출력하는 system-reminder 블록의 고유 header. 다른 종류 reminder
-# (telegram-guard 등) 와 구분.
-RECALL_INJECTION_HEADER = "# 메모리 회수 (Layer 4 hybrid)"
-# hook 출력 line 형식: "- **<name>** (score 0.XX, <source>) — <desc>"
+# 가 출력하는 system-reminder 블록의 고유 header. 옛 + 신규 두 format 모두
+# 인식해야 Step 2 deploy 후에도 retroactive 분석 가능.
+# - 옛 (Phase 2 이전): "# 메모리 회수 (Layer 4 hybrid)"
+# - 신규 (Phase 2, Step 2 이후): "MEMORY CONTEXT (다음 fact..."
+RECALL_INJECTION_HEADERS = (
+    "# 메모리 회수 (Layer 4 hybrid)",
+    "MEMORY CONTEXT (",
+)
+# hook 출력 line 형식 (두 format 모두):
+# - 옛: "- **<name>** (score 0.XX, <source>) — <desc>"
+# - 신규: "- [<name>] (score 0.XX, <source>) — <desc>"
 RECALLED_NAME_RE = re.compile(
-    r"^\s*-\s+\*\*([^*]+?)\*\*\s+\(score", re.MULTILINE
+    r"^\s*-\s+(?:\*\*([^*]+?)\*\*|\[([^\]]+?)\])\s+\(score",
+    re.MULTILINE,
 )
 
 
@@ -734,15 +742,23 @@ def extract_recalled_ids_from_hook_injection(text: str) -> list[str]:
     """transcript user-role text 가 hook 가 주입한 회수 system-reminder 면
     회수된 메모리 name list 추출. 아니면 빈 list.
 
-    매칭 조건: RECALL_INJECTION_HEADER 가 본문에 있고, "- **<name>** (score..."
-    패턴 줄들. 다른 종류 system-reminder (telegram-guard 등) 는 [] 반환.
+    매칭 조건: RECALL_INJECTION_HEADERS 중 하나가 본문에 있고, "- **<name>**"
+    (옛) 또는 "- [<name>]" (신규) 패턴 줄들. 다른 종류 system-reminder
+    (telegram-guard 등) 는 [] 반환.
 
     NEXT-37 Phase 1B retroactive — metrics.jsonl 에 recalled_ids 박히기
     이전 데이터 (Phase 1A 이전 수개월 누적) 에도 활용도 분석 가능.
     """
-    if not text or RECALL_INJECTION_HEADER not in text:
+    if not text:
         return []
-    return [m.group(1).strip() for m in RECALLED_NAME_RE.finditer(text)]
+    if not any(h in text for h in RECALL_INJECTION_HEADERS):
+        return []
+    ids: list[str] = []
+    for m in RECALLED_NAME_RE.finditer(text):
+        name = (m.group(1) or m.group(2) or "").strip()
+        if name:
+            ids.append(name)
+    return ids
 
 
 def load_recall_events_from_transcripts(
