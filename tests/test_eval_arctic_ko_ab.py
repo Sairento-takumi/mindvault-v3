@@ -14,6 +14,15 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 
 class TestEvalGuard(unittest.TestCase):
+    # Round 3 B3: setUp 에서 caller-set value 들 snapshot, tearDown 에서
+    # 복원. 직접 pop 만 하면 export 된 값 silent 삭제 leak.
+    _ENV_KEYS = ("MV3_EVAL_BGE_M3_URL", "MV3_EVAL_ARCTIC_KO_URL")
+
+    def setUp(self):
+        self._env_backup = {
+            k: os.environ.get(k) for k in self._ENV_KEYS
+        }
+
     def test_same_url_exits_with_code_2(self):
         # 환경변수로 두 URL 동일하게 만들면 run_ab() 가 exit 2
         os.environ["MV3_EVAL_BGE_M3_URL"] = "http://localhost:8081/embed"
@@ -41,8 +50,14 @@ class TestEvalGuard(unittest.TestCase):
             self.assertEqual(ctx.exception.code, 3)
 
     def tearDown(self):
-        for k in ("MV3_EVAL_BGE_M3_URL", "MV3_EVAL_ARCTIC_KO_URL"):
-            os.environ.pop(k, None)
+        # Round 3 B3: setUp 에서 backup 한 값 복원 — None 이면 pop, 값 있으면
+        # 재set. caller-set 환경변수 보존.
+        for k in self._ENV_KEYS:
+            original = self._env_backup.get(k)
+            if original is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = original
         if "eval_arctic_ko_ab" in sys.modules:
             del sys.modules["eval_arctic_ko_ab"]
 

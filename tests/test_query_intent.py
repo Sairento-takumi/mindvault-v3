@@ -134,27 +134,32 @@ class TestGemmaIntent(unittest.TestCase):
     """Sprint NEXT-3 — Gemma 보강 classifier."""
 
     def test_gemma_intent_env_off_default(self):
+        # Round 3 B3: patch.dict 로 caller-set MV3_GEMMA_INTENT 값 보존.
+        # 직접 pop 시 export 된 value 가 silent 삭제 leak.
         from query_intent import gemma_intent_enabled
         import os
-        os.environ.pop("MV3_GEMMA_INTENT", None)
-        self.assertFalse(gemma_intent_enabled())
+        from unittest.mock import patch
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("MV3_GEMMA_INTENT", None)
+            self.assertFalse(gemma_intent_enabled())
 
     def test_gemma_intent_env_on(self):
         from query_intent import gemma_intent_enabled
         import os
-        os.environ["MV3_GEMMA_INTENT"] = "1"
-        try:
+        from unittest.mock import patch
+        with patch.dict(os.environ, {"MV3_GEMMA_INTENT": "1"}, clear=False):
             self.assertTrue(gemma_intent_enabled())
-        finally:
-            os.environ.pop("MV3_GEMMA_INTENT", None)
 
     def test_gemma_intent_env_other_values_off(self):
         from query_intent import gemma_intent_enabled
         import os
+        from unittest.mock import patch
+        # Round 3 B3: for-loop assert 실패 시 leak 차단 — patch.dict context.
         for v in ("0", "true", "yes", ""):
-            os.environ["MV3_GEMMA_INTENT"] = v
-            self.assertFalse(gemma_intent_enabled(), f"value={v!r} should be off")
-        os.environ.pop("MV3_GEMMA_INTENT", None)
+            with patch.dict(os.environ, {"MV3_GEMMA_INTENT": v}, clear=False):
+                self.assertFalse(
+                    gemma_intent_enabled(), f"value={v!r} should be off"
+                )
 
     def test_normalize_gemma_label_valid(self):
         from query_intent import _normalize_gemma_label

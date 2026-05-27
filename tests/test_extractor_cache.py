@@ -37,11 +37,20 @@ class CacheTestBase(unittest.TestCase):
         ec.CACHE_DB = self.tmp_db
         ec._initialized = False
         self.ec = ec
-        # default env: cache enabled
+        # Round 3 B3: default env restore — caller-set 값 snapshot 후
+        # tearDown 에서 복원. 직접 pop 시 export 된 값 silent 삭제 leak.
+        self._orig_cache_disable_env = os.environ.get(
+            "MV3_EXTRACTOR_CACHE_DISABLE"
+        )
         os.environ.pop("MV3_EXTRACTOR_CACHE_DISABLE", None)
 
     def tearDown(self):
         self.tmp.cleanup()
+        # Round 3 B3: setUp 에서 backup 한 값 복원.
+        if self._orig_cache_disable_env is None:
+            os.environ.pop("MV3_EXTRACTOR_CACHE_DISABLE", None)
+        else:
+            os.environ["MV3_EXTRACTOR_CACHE_DISABLE"] = self._orig_cache_disable_env
 
 
 class TestPromptHash(CacheTestBase):
