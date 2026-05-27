@@ -48,6 +48,29 @@ PROCEDURAL_GATE_BONUS = 0.05
 PROCEDURAL_PATH_MARKER = "/_procedural/"
 EMBED_DIM = 1024
 SNIPPET_CHARS = 600
+
+# T8 (v3.4 contradiction): deprecated_by 가 박힌 메모리는 회수 score 를 감쇠.
+# raw_cosine 게이트는 그대로 통과시키되 sort key 만 영향 — supersede 후
+# 새 메모리가 dominant 하면 자연스럽게 밀려난다. 0.3 = "완전 제외는 아니나
+# 경쟁자 있으면 잘 밀려나는 강도".
+DEPRECATED_DECAY = 0.3
+
+
+def _is_deprecated(path: Path) -> bool:
+    """frontmatter 의 deprecated_by 필드 검출. 첫 1KB 만 읽음 (hot path)."""
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as f:
+            head = f.read(1024)
+    except OSError:
+        return False
+    return bool(re.search(r"^deprecated_by:\s*\[", head, re.MULTILINE))
+
+
+def _apply_deprecation_decay(path: Path, original_score: float) -> float:
+    """deprecated_by 가 있으면 score × DEPRECATED_DECAY, 없으면 원래 score."""
+    if _is_deprecated(path):
+        return original_score * DEPRECATED_DECAY
+    return original_score
 # Sprint 11: 160→600. 회수 1건만 출력하므로 토큰 부담은 ~150 tokens 증가.
 # 이전 160자는 frontmatter 마무리 + 첫 한 줄만 잡혀 핵심 본문(수치·결정 사항)
 # 미포함 → Claude가 추가 Read 호출. net token 절약을 위해 발췌를 한 호흡에.
@@ -569,6 +592,10 @@ def recall_memory(
             if score_threshold > 0 and info["score"] < score_threshold:
                 continue
             kept.append((path, info, raw))
+        # T8: deprecated_by 메모리 score × 0.3 감쇠 (raw_cosine 은 그대로 — 게이트
+        # 통과는 유지하되 sort 동률 시 밀려나도록).
+        for _path, _info, _raw in kept:
+            _info["score"] = _apply_deprecation_decay(Path(_path), _info["score"])
         # 정렬: raw cosine 우선 (절대 관련도) → 동률 시 normalize score
         kept.sort(key=lambda x: (x[2], x[1]["score"]), reverse=True)
         kept = kept[:top_k]

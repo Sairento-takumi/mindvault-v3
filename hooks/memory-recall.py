@@ -104,6 +104,30 @@ except Exception:
     pass
 INDEX_DB = DATA_DIR / "index.db"
 
+# T8 (v3.4 contradiction): deprecated_by 감쇠 primitives 를 hook 모듈 namespace
+# 에 re-export — tests/test_memory_recall_deprecated.py 가 hooks/memory-recall.py
+# 를 직접 spec_from_file_location 로 로드하기 때문. 실제 로직은 memory_search.py
+# 안의 recall_memory pipeline 에서 호출된다 (single source of truth).
+try:
+    for _d in (
+        Path(_os_paths.environ.get("MV3_SCRIPTS_DIR", "~/.claude/scripts/mindvault")).expanduser(),
+        Path(__file__).resolve().parent.parent / "src",
+    ):
+        if _d.is_dir() and str(_d) not in sys.path:
+            sys.path.insert(0, str(_d))
+    from memory_search import (  # noqa: E402
+        DEPRECATED_DECAY,
+        _apply_deprecation_decay,
+        _is_deprecated,
+    )
+except Exception:
+    # silent fallback — hook 은 절대 import 단계에서 깨지지 않는다.
+    DEPRECATED_DECAY = 0.3
+    def _is_deprecated(path):  # type: ignore[no-redef]
+        return False
+    def _apply_deprecation_decay(path, original_score):  # type: ignore[no-redef]
+        return original_score
+
 # import 경로 — production(배포본) + dev(repo) 둘 다 지원.
 # v3.2.7: MV3_SCRIPTS_DIR env var 우선 (테스트 격리 + 사용자 override).
 _HOOK_FILE = Path(__file__).resolve()
