@@ -1,6 +1,7 @@
 """T6 review CLI tests (list / show only; resolve apply is T7's job)."""
 from __future__ import annotations
 import json
+import re
 import pytest
 
 
@@ -188,3 +189,157 @@ def test_load_all_is_public_helper(tmp_path, monkeypatch):
     slugs = [d["new_slug"] for d in all_rows]
     assert "x" in slugs
     assert "a" in slugs
+
+
+def test_resolve_dismiss_apply_marks_jsonl(tmp_path, monkeypatch):
+    from src import contradiction_review_cli as cli
+    monkeypatch.setenv("MV3_RUNTIME_DIR", str(tmp_path))
+    p = _write_queue(tmp_path, [
+        {"new_slug": "a", "target_name": "b", "target_path": "/x/b.md",
+         "kind": "fact_correction", "reason": "r", "confidence": 0.8,
+         "resolved": False},
+    ])
+
+    rc = cli.main(["resolve", "1", "--action", "dismiss", "--apply"])
+    assert rc == 0
+    line = json.loads(p.read_text(encoding="utf-8").strip())
+    assert line["resolved"] == "dismissed"
+
+
+def test_resolve_supersede_apply_writes_frontmatter(tmp_path, monkeypatch):
+    from src import contradiction_review_cli as cli
+    monkeypatch.setenv("MV3_RUNTIME_DIR", str(tmp_path))
+
+    mem = tmp_path / "memory"
+    mem.mkdir()
+    new_p = mem / "new_x.md"
+    old_p = mem / "old_x.md"
+    new_p.write_text(
+        "---\nname: new-x\ntype: feedback\n---\n\nnew body\n",
+        encoding="utf-8",
+    )
+    old_p.write_text(
+        "---\nname: old-x\ntype: feedback\n---\n\nold body\n",
+        encoding="utf-8",
+    )
+
+    _write_queue(tmp_path, [{
+        "new_slug": "new-x", "new_path": str(new_p),
+        "target_name": "old-x", "target_path": str(old_p),
+        "kind": "decision_reversal", "reason": "r", "confidence": 0.9,
+        "resolved": False,
+    }])
+
+    rc = cli.main(["resolve", "1", "--action", "supersede", "--apply"])
+    assert rc == 0
+    new_content = new_p.read_text(encoding="utf-8")
+    old_content = old_p.read_text(encoding="utf-8")
+    assert "supersedes:" in new_content and "old-x" in new_content
+    assert "deprecated_by:" in old_content and "new-x" in old_content
+
+
+def test_resolve_supersede_idempotent(tmp_path, monkeypatch):
+    """Calling supersede twice does not duplicate the list entry."""
+    from src import contradiction_review_cli as cli
+    monkeypatch.setenv("MV3_RUNTIME_DIR", str(tmp_path))
+
+    mem = tmp_path / "memory"
+    mem.mkdir()
+    new_p = mem / "new_x.md"
+    old_p = mem / "old_x.md"
+    new_p.write_text(
+        "---\nname: new-x\nsupersedes: [old-x]\ntype: feedback\n---\n\nbody\n",
+        encoding="utf-8",
+    )
+    old_p.write_text(
+        "---\nname: old-x\ntype: feedback\n---\n\nbody\n",
+        encoding="utf-8",
+    )
+
+    _write_queue(tmp_path, [{
+        "new_slug": "new-x", "new_path": str(new_p),
+        "target_name": "old-x", "target_path": str(old_p),
+        "kind": "decision_reversal", "reason": "r", "confidence": 0.9,
+        "resolved": False,
+    }])
+
+    cli.main(["resolve", "1", "--action", "supersede", "--apply"])
+
+    new_content = new_p.read_text(encoding="utf-8")
+    # supersedes list should have only one "old-x" entry
+    match = re.search(r"supersedes:\s*\[(.*?)\]", new_content)
+    items = [s.strip() for s in match.group(1).split(",") if s.strip()]
+    assert items.count("old-x") == 1
+
+
+def test_resolve_update_apply_replaces_old_body_deletes_new(tmp_path, monkeypatch):
+    from src import contradiction_review_cli as cli
+    monkeypatch.setenv("MV3_RUNTIME_DIR", str(tmp_path))
+
+    mem = tmp_path / "memory"
+    mem.mkdir()
+    new_p = mem / "new_x.md"
+    old_p = mem / "old_x.md"
+    new_p.write_text(
+        "---\nname: new-x\ntype: feedback\n---\n\nfresh body content\n",
+        encoding="utf-8",
+    )
+    old_p.write_text(
+        "---\nname: old-x\ntype: feedback\n---\n\nold body content\n",
+        encoding="utf-8",
+    )
+
+    _write_queue(tmp_path, [{
+        "new_slug": "new-x", "new_path": str(new_p),
+        "target_name": "old-x", "target_path": str(old_p),
+        "kind": "metric_update", "reason": "r", "confidence": 0.9,
+        "resolved": False,
+    }])
+
+    rc = cli.main(["resolve", "1", "--action", "update", "--apply"])
+    assert rc == 0
+
+    old_content = old_p.read_text(encoding="utf-8")
+    assert "name: old-x" in old_content  # frontmatter preserved
+    assert "fresh body content" in old_content  # body updated
+    assert "old body content" not in old_content
+    assert not new_p.exists()  # new file deleted
+
+
+def test_resolve_update_marks_jsonl_resolved(tmp_path, monkeypatch):
+    from src import contradiction_review_cli as cli
+    monkeypatch.setenv("MV3_RUNTIME_DIR", str(tmp_path))
+
+    mem = tmp_path / "memory"
+    mem.mkdir()
+    new_p = mem / "new_x.md"
+    old_p = mem / "old_x.md"
+    new_p.write_text("---\nname: new-x\ntype: feedback\n---\n\nbody\n", encoding="utf-8")
+    old_p.write_text("---\nname: old-x\ntype: feedback\n---\n\nbody\n", encoding="utf-8")
+
+    qp = _write_queue(tmp_path, [{
+        "new_slug": "new-x", "new_path": str(new_p),
+        "target_name": "old-x", "target_path": str(old_p),
+        "kind": "metric_update", "reason": "r", "confidence": 0.9,
+        "resolved": False,
+    }])
+
+    cli.main(["resolve", "1", "--action", "update", "--apply"])
+
+    line = json.loads(qp.read_text(encoding="utf-8").strip())
+    assert line["resolved"] == "updated"
+
+
+def test_resolve_supersede_missing_file_returns_error(tmp_path, monkeypatch):
+    from src import contradiction_review_cli as cli
+    monkeypatch.setenv("MV3_RUNTIME_DIR", str(tmp_path))
+
+    _write_queue(tmp_path, [{
+        "new_slug": "x", "new_path": str(tmp_path / "nonexistent_new.md"),
+        "target_name": "y", "target_path": str(tmp_path / "nonexistent_old.md"),
+        "kind": "decision_reversal", "reason": "r", "confidence": 0.9,
+        "resolved": False,
+    }])
+
+    rc = cli.main(["resolve", "1", "--action", "supersede", "--apply"])
+    assert rc == 2
