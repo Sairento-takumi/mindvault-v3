@@ -26,3 +26,23 @@ def test_detect_returns_empty_when_mem_dir_empty(tmp_path):
     candidate = {"slug": "x", "title": "X", "body": "no related"}
     result = detect_contradictions(candidate, tmp_path)
     assert result == []
+
+
+def test_recall_candidates_excludes_self_slug(tmp_path, write_memory, monkeypatch):
+    from src.contradiction_detector import _recall_candidates
+
+    own = write_memory(tmp_path, "new_metric.md",
+                       "name: new-metric\ntype: feedback", "hit rate 66.3%")
+    other = write_memory(tmp_path, "old_metric.md",
+                         "name: old-metric\ntype: feedback", "hit rate 65%")
+
+    def fake_hybrid(query, mem_dir, top_k):
+        return [(own, 0.95), (other, 0.85)]
+    monkeypatch.setattr("src.contradiction_detector._hybrid_search", fake_hybrid)
+
+    candidate = {"slug": "new-metric", "title": "회수율", "body": "hit rate 66.3%"}
+    found = _recall_candidates(candidate, tmp_path, top_k=5)
+
+    paths = [p for p, _ in found]
+    assert own not in paths
+    assert other in paths

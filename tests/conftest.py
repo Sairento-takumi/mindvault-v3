@@ -22,6 +22,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
+
 # v3.2.7: sys.path / sys.modules 격리 — 다른 테스트가 production deploy 경로
 # (~/.claude/scripts/mindvault, ~/.claude/hooks) 를 sys.path 에 insert 해서
 # worktree 본 import 가 캐싱 미스로 production 본을 잡는 패턴 방지.
@@ -80,3 +82,18 @@ def pytest_sessionfinish(session, exitstatus):  # noqa: ARG001
         shutil.rmtree(_TMP_ROOT, ignore_errors=True)
     except Exception:
         pass
+
+
+@pytest.fixture
+def write_memory():
+    """memory/*.md 파일을 frontmatter+body 로 작성하는 헬퍼.
+
+    Usage:
+        def test_x(tmp_path, write_memory):
+            p = write_memory(tmp_path, "foo.md", "name: foo\\ntype: feedback", "본문")
+    """
+    def _write(mem_dir, fname, frontmatter, body):
+        p = mem_dir / fname
+        p.write_text(f"---\n{frontmatter}\n---\n\n{body}\n", encoding="utf-8")
+        return p
+    return _write
