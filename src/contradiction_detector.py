@@ -209,10 +209,14 @@ def _recall_candidates(
     return [(p, s) for p, s in results if not is_self(p)]
 
 
-def _call_gemma_for_classify(prompt: str, max_tokens: int = 400) -> str | None:
+def _call_gemma_for_classify(prompt: str, max_tokens: int = 1536) -> str | None:
     """Gemma 4 E4B 호출. 실패 시 None (silent, _debug 로깅).
 
     BaseException 은 통과시킴 (sentinel pattern, hook hard-budget 호환).
+
+    max_tokens 는 reasoning(CoT) 분리 출력 모델 기준. gemma-4-e4b 가 응답을
+    message.reasoning + message.content 로 나눠 내므로, budget 이 작으면 reasoning
+    (~500-850 tok) 이 다 먹고 content(JSON) 가 빈 채 finish_reason=length 로 잘림.
     """
     body = json.dumps({
         "model": GEMMA_MODEL,
