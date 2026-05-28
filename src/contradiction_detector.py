@@ -243,8 +243,14 @@ def _call_gemma_for_classify(prompt: str, max_tokens: int = 1536) -> str | None:
     message = choices[0].get("message")
     if not isinstance(message, dict):
         return None
-    content = message.get("content") or ""
-    return content.strip() or None
+    content = (message.get("content") or "").strip()
+    if not content:
+        # Reasoning models can burn the whole budget on CoT (message.reasoning)
+        # and emit empty content with finish_reason=length. Without this log it
+        # looks identical to a clean no-detection and the failure stays invisible.
+        _debug(f"gemma classify empty content (finish_reason={choices[0].get('finish_reason')})")
+        return None
+    return content
 
 
 def _strip_code_fences(text: str) -> str:
