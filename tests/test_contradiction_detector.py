@@ -362,3 +362,69 @@ def test_append_to_review_queue_uses_flock(tmp_path, monkeypatch):
 
     # LOCK_EX should have been called
     assert fcntl.LOCK_EX in flock_calls, f"flock LOCK_EX not acquired (calls={flock_calls})"
+
+
+def test_classify_rejects_list_kind(monkeypatch):
+    """Gemma returning {"kind": ["metric_update"]} must return None, not crash."""
+    from src.contradiction_detector import _classify_pair
+    monkeypatch.setattr(
+        "src.contradiction_detector._call_gemma_for_classify",
+        lambda p, max_tokens=400: '{"kind": ["metric_update"], "reason": "r", "confidence": 0.9}',
+    )
+    # Must NOT raise TypeError: unhashable type: 'list'
+    assert _classify_pair("a", "b") is None
+
+
+def test_classify_rejects_dict_kind(monkeypatch):
+    from src.contradiction_detector import _classify_pair
+    monkeypatch.setattr(
+        "src.contradiction_detector._call_gemma_for_classify",
+        lambda p, max_tokens=400: '{"kind": {"x": 1}, "reason": "r", "confidence": 0.9}',
+    )
+    assert _classify_pair("a", "b") is None
+
+
+def test_classify_nan_confidence_falls_back(monkeypatch):
+    """nan confidence must NOT pass the gate (nan < 0.7 is False — silent accept)."""
+    from src.contradiction_detector import _classify_pair
+    monkeypatch.setattr(
+        "src.contradiction_detector._call_gemma_for_classify",
+        lambda p, max_tokens=400: '{"kind": "metric_update", "reason": "r", "confidence": "NaN"}',
+    )
+    result = _classify_pair("a", "b")
+    assert result is not None
+    assert result["confidence"] == 0.5  # fell back, below threshold
+
+
+def test_classify_inf_confidence_falls_back(monkeypatch):
+    from src.contradiction_detector import _classify_pair
+    monkeypatch.setattr(
+        "src.contradiction_detector._call_gemma_for_classify",
+        lambda p, max_tokens=400: '{"kind": "metric_update", "reason": "r", "confidence": "inf"}',
+    )
+    result = _classify_pair("a", "b")
+    assert result is not None
+    assert result["confidence"] == 0.5
+
+
+def test_classify_out_of_range_confidence_falls_back(monkeypatch):
+    from src.contradiction_detector import _classify_pair
+    monkeypatch.setattr(
+        "src.contradiction_detector._call_gemma_for_classify",
+        lambda p, max_tokens=400: '{"kind": "metric_update", "reason": "r", "confidence": 999}',
+    )
+    result = _classify_pair("a", "b")
+    assert result is not None
+    assert result["confidence"] == 0.5
+
+
+def test_classify_valid_confidence_preserved(monkeypatch):
+    """Regression: a valid confidence still passes through unchanged."""
+    from src.contradiction_detector import _classify_pair
+    monkeypatch.setattr(
+        "src.contradiction_detector._call_gemma_for_classify",
+        lambda p, max_tokens=400: '{"kind": "metric_update", "reason": "r", "confidence": 0.92}',
+    )
+    result = _classify_pair("a", "b")
+    assert result is not None
+    assert result["confidence"] == 0.92

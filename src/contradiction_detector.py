@@ -3,6 +3,7 @@ from __future__ import annotations
 import enum
 import fcntl
 import json
+import math
 import os
 import re
 import time
@@ -266,16 +267,26 @@ def _classify_pair(new_body: str, old_body: str) -> dict | None:
         return None
 
     valid_kinds = {k.value for k in ContradictionKind}
-    if parsed.get("kind") not in valid_kinds:
+    kind = parsed.get("kind")
+    if not isinstance(kind, str) or kind not in valid_kinds:
         return None
 
-    parsed.setdefault("confidence", 0.5)
     parsed.setdefault("reason", "")
 
-    try:
-        parsed["confidence"] = float(parsed["confidence"])
-    except (TypeError, ValueError):
-        parsed["confidence"] = 0.5
+    # Validate confidence: finite float in [0,1]. nan/inf/out-of-range/bool all
+    # fall back to 0.5 (below CONFIDENCE_THRESHOLD, so a hallucinated value won't
+    # pass the gate — nan < 0.7 is False, which would silently accept otherwise).
+    raw_conf = parsed.get("confidence", 0.5)
+    if isinstance(raw_conf, bool):
+        conf = 0.5
+    else:
+        try:
+            conf = float(raw_conf)
+        except (TypeError, ValueError):
+            conf = 0.5
+        if not math.isfinite(conf) or not (0.0 <= conf <= 1.0):
+            conf = 0.5
+    parsed["confidence"] = conf
 
     return parsed
 
