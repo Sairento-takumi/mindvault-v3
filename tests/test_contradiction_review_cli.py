@@ -212,14 +212,17 @@ def test_resolve_supersede_apply_writes_frontmatter(tmp_path, monkeypatch):
 
     mem = tmp_path / "memory"
     mem.mkdir()
-    new_p = mem / "new_x.md"
-    old_p = mem / "old_x.md"
+    # File names (stems) ARE the canonical supersede identifiers (Fix I-name:
+    # _supersede_id uses the file stem, not the human `name:` title). Use
+    # hyphenated stems so they match the queue's new_slug / target_name.
+    new_p = mem / "new-x.md"
+    old_p = mem / "old-x.md"
     new_p.write_text(
-        "---\nname: new-x\ntype: feedback\n---\n\nnew body\n",
+        "---\nname: New X With Spaces\ntype: feedback\n---\n\nnew body\n",
         encoding="utf-8",
     )
     old_p.write_text(
-        "---\nname: old-x\ntype: feedback\n---\n\nold body\n",
+        "---\nname: Old X With Spaces\ntype: feedback\n---\n\nold body\n",
         encoding="utf-8",
     )
 
@@ -234,8 +237,9 @@ def test_resolve_supersede_apply_writes_frontmatter(tmp_path, monkeypatch):
     assert rc == 0
     new_content = new_p.read_text(encoding="utf-8")
     old_content = old_p.read_text(encoding="utf-8")
-    assert "supersedes:" in new_content and "old-x" in new_content
-    assert "deprecated_by:" in old_content and "new-x" in old_content
+    # stem identifiers in the inline lists; spaced human title NOT leaked in
+    assert "supersedes: [old-x]" in new_content
+    assert "deprecated_by: [new-x]" in old_content
 
 
 def test_resolve_supersede_idempotent(tmp_path, monkeypatch):
@@ -245,8 +249,9 @@ def test_resolve_supersede_idempotent(tmp_path, monkeypatch):
 
     mem = tmp_path / "memory"
     mem.mkdir()
-    new_p = mem / "new_x.md"
-    old_p = mem / "old_x.md"
+    # Hyphenated stems == supersede identifiers (see _supersede_id).
+    new_p = mem / "new-x.md"
+    old_p = mem / "old-x.md"
     new_p.write_text(
         "---\nname: new-x\nsupersedes: [old-x]\ntype: feedback\n---\n\nbody\n",
         encoding="utf-8",
@@ -266,7 +271,7 @@ def test_resolve_supersede_idempotent(tmp_path, monkeypatch):
     cli.main(["resolve", "1", "--action", "supersede", "--apply"])
 
     new_content = new_p.read_text(encoding="utf-8")
-    # supersedes list should have only one "old-x" entry
+    # supersedes list should have only one "old-x" entry (idempotent)
     match = re.search(r"supersedes:\s*\[(.*?)\]", new_content)
     items = [s.strip() for s in match.group(1).split(",") if s.strip()]
     assert items.count("old-x") == 1
@@ -439,3 +444,173 @@ def test_patch_frontmatter_flow_style_still_works_after_block_guard(tmp_path):
     content = p.read_text(encoding="utf-8")
     # Should now contain "supersedes: [a, b]"
     assert "supersedes: [a, b]" in content
+
+
+# ---------------------------------------------------------------------------
+# v3.4 static-audit sweep (5 latent defects + tmp pid minor)
+# ---------------------------------------------------------------------------
+
+
+def test_extract_yaml_name_multiword(tmp_path):
+    from src.contradiction_review_cli import _extract_yaml_name
+    p = tmp_path / "x.md"
+    p.write_text("---\nname: MindVault v3.4 contradiction\ntype: feedback\n---\n\nbody\n", encoding="utf-8")
+    name = _extract_yaml_name(p)
+    assert name is not None
+    assert name != "MindVault"  # not just first token
+    # Decision: _extract_yaml_name returns the FULL human title verbatim.
+    assert name == "MindVault v3.4 contradiction"
+
+
+def test_extract_yaml_name_quoted(tmp_path):
+    from src.contradiction_review_cli import _extract_yaml_name
+    p = tmp_path / "x.md"
+    p.write_text('---\nname: "quoted name"\ntype: feedback\n---\n\nbody\n', encoding="utf-8")
+    name = _extract_yaml_name(p)
+    assert name is not None
+    assert '"' not in name  # quotes stripped
+    assert name == "quoted name"
+
+
+def test_extract_yaml_name_single_quoted(tmp_path):
+    from src.contradiction_review_cli import _extract_yaml_name
+    p = tmp_path / "x.md"
+    p.write_text("---\nname: 'single quoted'\ntype: feedback\n---\n\nbody\n", encoding="utf-8")
+    name = _extract_yaml_name(p)
+    assert name == "single quoted"
+
+
+def test_extract_yaml_name_single_token_still_works(tmp_path):
+    from src.contradiction_review_cli import _extract_yaml_name
+    p = tmp_path / "x.md"
+    p.write_text("---\nname: simple-slug\ntype: feedback\n---\n\nbody\n", encoding="utf-8")
+    assert _extract_yaml_name(p) == "simple-slug"
+
+
+def test_mark_resolved_preserves_malformed_lines(tmp_path, monkeypatch):
+    """A corrupt jsonl line must survive when another row is resolved."""
+    from src import contradiction_review_cli as cli
+    monkeypatch.setenv("MV3_RUNTIME_DIR", str(tmp_path))
+    import json
+    p = tmp_path / "contradictions.jsonl"
+    good = json.dumps({"new_slug": "a", "target_name": "b", "target_path": "/x/b.md",
+                       "kind": "metric_update", "reason": "r", "confidence": 0.9,
+                       "ts": "2026-01-01T00:00:00Z", "resolved": False})
+    p.write_text(good + "\n" + "CORRUPT NOT JSON\n", encoding="utf-8")
+
+    cli.main(["resolve", "1", "--action", "dismiss", "--apply"])
+
+    lines = p.read_text(encoding="utf-8").splitlines()
+    # corrupt line must still be present
+    assert any("CORRUPT NOT JSON" in ln for ln in lines), "malformed line was dropped"
+    # the good row must now be resolved
+    parsed = [json.loads(ln) for ln in lines if ln.strip() and ln.strip() != "CORRUPT NOT JSON"]
+    assert parsed[0].get("resolved") == "dismissed"
+
+
+def test_mark_resolved_disambiguates_duplicate_tuple(tmp_path, monkeypatch):
+    """Two rows with same (new_slug, target_name) — resolving #2 must not mark #1."""
+    from src import contradiction_review_cli as cli
+    monkeypatch.setenv("MV3_RUNTIME_DIR", str(tmp_path))
+    import json
+    p = tmp_path / "contradictions.jsonl"
+    row1 = {"new_slug": "a", "target_name": "b", "target_path": "/x/b.md",
+            "kind": "metric_update", "reason": "first", "confidence": 0.9,
+            "ts": "2026-01-01T00:00:00Z", "resolved": False}
+    row2 = {"new_slug": "a", "target_name": "b", "target_path": "/x/b.md",
+            "kind": "fact_correction", "reason": "second", "confidence": 0.8,
+            "ts": "2026-01-02T00:00:00Z", "resolved": False}
+    p.write_text(json.dumps(row1) + "\n" + json.dumps(row2) + "\n", encoding="utf-8")
+
+    # Resolve index 2 (the fact_correction row)
+    cli.main(["resolve", "2", "--action", "dismiss", "--apply"])
+
+    rows = [json.loads(ln) for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    # row1 (first/metric_update) must still be unresolved; row2 resolved
+    by_kind = {r["kind"]: r for r in rows}
+    assert not by_kind["metric_update"].get("resolved"), "wrong row marked — disambiguation failed"
+    assert by_kind["fact_correction"].get("resolved") == "dismissed"
+
+
+def test_apply_update_unlink_failure_returns_false(tmp_path, monkeypatch):
+    from src import contradiction_review_cli as cli
+    mem = tmp_path / "memory"
+    mem.mkdir()
+    new_p = mem / "new_x.md"
+    old_p = mem / "old_x.md"
+    new_p.write_text("---\nname: new-x\n---\n\nnew\n", encoding="utf-8")
+    old_p.write_text("---\nname: old-x\n---\n\nold\n", encoding="utf-8")
+
+    # Make unlink raise a non-missing OSError
+    import pathlib
+    orig_unlink = pathlib.Path.unlink
+    def boom(self, missing_ok=False):
+        if self == new_p:
+            raise PermissionError("cannot unlink")
+        return orig_unlink(self, missing_ok=missing_ok)
+    monkeypatch.setattr(pathlib.Path, "unlink", boom)
+
+    from src.contradiction_review_cli import _apply_update
+    ok = _apply_update(new_p, old_p)
+    assert ok is False, "unlink failure must propagate as False"
+
+
+def test_apply_supersede_uses_file_stem_not_human_title(tmp_path):
+    """supersedes:/deprecated_by: lists must use the file STEM (slug, no spaces),
+    not the multi-word frontmatter name — else the inline list is corrupted."""
+    from src.contradiction_review_cli import _apply_supersede
+    new_p = tmp_path / "new-memory.md"
+    old_p = tmp_path / "old-memory.md"
+    new_p.write_text("---\nname: New Memory With Spaces\nsupersedes: []\n---\n\nnew\n", encoding="utf-8")
+    old_p.write_text("---\nname: Old Memory With Spaces\ndeprecated_by: []\n---\n\nold\n", encoding="utf-8")
+
+    ok = _apply_supersede(new_p, old_p)
+    assert ok is True
+    new_content = new_p.read_text(encoding="utf-8")
+    old_content = old_p.read_text(encoding="utf-8")
+    # stems used, NOT the spaced human title (which would break [a, b] inline list)
+    assert "supersedes: [old-memory]" in new_content
+    assert "deprecated_by: [new-memory]" in old_content
+    # the spaced human title must NOT leak into the inline list itself
+    assert "supersedes: [Old Memory" not in new_content
+    assert "deprecated_by: [New Memory" not in old_content
+
+
+def test_apply_supersede_no_partial_mutation_when_old_block_style(tmp_path):
+    """If OLD cannot be patched (block-style list), NEW must NOT be mutated either."""
+    from src.contradiction_review_cli import _apply_supersede
+    new_p = tmp_path / "new-memory.md"
+    old_p = tmp_path / "old-memory.md"
+    new_p.write_text("---\nname: New\nsupersedes: []\n---\n\nnew\n", encoding="utf-8")
+    # block-style deprecated_by — _patch_frontmatter_list refuses this.
+    # Trailing 'type:' key ensures the list isn't the final fm key (the block
+    # detector requires a newline after the last list item).
+    old_p.write_text("---\nname: Old\ndeprecated_by:\n  - z\ntype: feedback\n---\n\nold\n", encoding="utf-8")
+
+    new_before = new_p.read_text(encoding="utf-8")
+    ok = _apply_supersede(new_p, old_p)
+    assert ok is False
+    # NEW must be untouched — no half-state
+    assert new_p.read_text(encoding="utf-8") == new_before, "NEW mutated despite OLD failure (partial mutation)"
+
+
+def test_mark_resolved_tmp_includes_pid(tmp_path, monkeypatch):
+    """tmp file name must include pid to avoid concurrent-resolve races."""
+    import os
+    from src import contradiction_review_cli as cli
+    monkeypatch.setenv("MV3_RUNTIME_DIR", str(tmp_path))
+    import json
+    p = tmp_path / "contradictions.jsonl"
+    row = {"new_slug": "a", "target_name": "b", "kind": "metric_update",
+           "reason": "r", "confidence": 0.9, "ts": "2026-01-01T00:00:00Z", "resolved": False}
+    p.write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+    captured = {}
+    orig_replace = os.replace
+    def spy(src, dst):
+        captured["src"] = str(src)
+        return orig_replace(src, dst)
+    monkeypatch.setattr(os, "replace", spy)
+
+    cli.main(["resolve", "1", "--action", "dismiss", "--apply"])
+    assert str(os.getpid()) in captured["src"], f"pid not in tmp name: {captured['src']}"

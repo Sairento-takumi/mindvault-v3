@@ -109,13 +109,65 @@ def _split_frontmatter(text: str) -> tuple[str, str]:
 
 
 def _extract_yaml_name(p: Path) -> str | None:
-    """Read 'name:' from frontmatter."""
+    """Read 'name:' from frontmatter (full human title, may contain spaces).
+
+    Fix I-name: the previous ``\\S+`` + ``$`` anchor matched only single-token
+    names, so the COMMON case written by session_memory_end.write_staged
+    (``name: {item['title']}`` — a human title WITH SPACES) returned None and
+    silently broke supersede. We now capture the whole line and strip
+    surrounding quotes. Note: callers that embed an identifier into an inline
+    frontmatter list must NOT use this value directly — a spaced/comma'd title
+    would corrupt ``key: [a, b]``. Use ``_supersede_id`` (file stem) instead.
+    """
     text = _read_text(p)
     if not text:
         return None
     fm, _ = _split_frontmatter(text)
-    m = re.search(r"^name:\s*(\S+)\s*$", fm, re.MULTILINE)
-    return m.group(1) if m else None
+    m = re.search(r"^name:\s*(.+?)\s*$", fm, re.MULTILINE)
+    if not m:
+        return None
+    name = m.group(1).strip()
+    # strip surrounding quotes (single or double)
+    if len(name) >= 2 and name[0] == name[-1] and name[0] in ("'", '"'):
+        name = name[1:-1]
+    return name or None
+
+
+def _supersede_id(p: Path) -> str:
+    """Identifier written into ``supersedes:`` / ``deprecated_by:`` inline lists.
+
+    Decision (Fix I-name): use the FILE STEM (kebab slug, no spaces/commas),
+    NOT the human ``name:`` title. Rationale:
+      1. The contradiction queue already keys old memories by ``path.stem``
+         (contradiction_detector.py:125 ``target_name=path.stem``), so the stem
+         is the canonical cross-reference identifier in this system.
+      2. The lists are flow-style inline lists (``key: [a, b]``); a multi-word
+         or comma-bearing human title would corrupt the list syntax.
+    The stem is guaranteed space/comma-free, so it round-trips safely.
+    """
+    return p.stem
+
+
+def _can_patch_frontmatter_list(p: Path, key: str) -> bool:
+    """Dry validation: would ``_patch_frontmatter_list(p, key, ...)`` succeed?
+
+    Mirrors the refusal conditions (unreadable, no frontmatter, block-style
+    list) WITHOUT mutating. Used by _apply_supersede to validate BOTH files
+    before mutating EITHER (Fix I-supersede-rollback).
+    """
+    text = _read_text(p)
+    if text is None:
+        return False
+    fm, _ = _split_frontmatter(text)
+    if not fm:
+        return False
+    block_re = re.compile(
+        rf"^{re.escape(key)}:\s*\n(\s+-\s+\S+\s*\n)+",
+        re.MULTILINE,
+    )
+    if block_re.search(fm):
+        return False
+    return True
 
 
 def _patch_frontmatter_list(p: Path, key: str, value: str) -> bool:
@@ -168,25 +220,67 @@ def _patch_frontmatter_list(p: Path, key: str, value: str) -> bool:
     else:
         fm = fm.rstrip() + f"\n{key}: [{value}]"
 
-    # Atomic write: tmp + os.replace
-    tmp = p.with_suffix(p.suffix + ".tmp")
+    # Atomic write: tmp + os.replace (pid-suffixed tmp avoids concurrent races).
+    tmp = p.with_suffix(f"{p.suffix}.{os.getpid()}.tmp")
     tmp.write_text(f"---\n{fm}\n---\n\n{body.lstrip()}", encoding="utf-8")
     os.replace(tmp, p)
     return True
 
 
 def _apply_supersede(new_path: Path, old_path: Path) -> bool:
-    new_name = _extract_yaml_name(new_path)
-    old_name = _extract_yaml_name(old_path)
-    if not new_name or not old_name:
+    """NEW supersedes OLD: NEW gets ``supersedes: [old]``, OLD gets
+    ``deprecated_by: [new]``.
+
+    Fix I-name: identifiers are file STEMS (slug, space-free), not the human
+    ``name:`` titles — see ``_supersede_id``.
+
+    Fix I-supersede-rollback: validate BOTH files are patchable (readable,
+    have frontmatter, not block-style) BEFORE mutating EITHER. Previously NEW
+    was patched first; if the OLD patch then failed (block-style refusal,
+    OSError) NEW already claimed to supersede OLD while OLD lacked
+    ``deprecated_by`` — an inconsistent half-state reported as failure. We
+    require both readable names + both flow-style patchable up front, then
+    patch OLD first (the file historically more likely to carry a block-style
+    list and thus fail) and only patch NEW if OLD succeeded. This keeps the
+    half-state window to a single unavoidable point (OLD ok / NEW write
+    crash), which is the least harmful ordering: OLD-deprecated-without-NEW-
+    supersedes is self-describing, whereas the reverse orphans a dangling
+    supersede claim.
+    """
+    # Both files must expose a readable name (sanity: confirms valid memories).
+    if not _extract_yaml_name(new_path) or not _extract_yaml_name(old_path):
         return False
-    ok1 = _patch_frontmatter_list(new_path, "supersedes", old_name)
-    ok2 = _patch_frontmatter_list(old_path, "deprecated_by", new_name)
-    return ok1 and ok2
+    # Dry validation of BOTH patches before mutating either.
+    if not _can_patch_frontmatter_list(new_path, "supersedes"):
+        return False
+    if not _can_patch_frontmatter_list(old_path, "deprecated_by"):
+        return False
+
+    new_id = _supersede_id(new_path)
+    old_id = _supersede_id(old_path)
+    # Patch OLD first (most likely to fail); abort before touching NEW if it does.
+    if not _patch_frontmatter_list(old_path, "deprecated_by", new_id):
+        return False
+    if not _patch_frontmatter_list(new_path, "supersedes", old_id):
+        return False
+    return True
 
 
 def _apply_update(new_path: Path, old_path: Path) -> bool:
-    """OLD body ← NEW body, frontmatter from OLD preserved, NEW deleted."""
+    """OLD body ← NEW body, frontmatter from OLD preserved, NEW deleted.
+
+    Fix I-update-unlink: previously the NEW unlink was best-effort and the
+    function returned True even if unlink raised — leaving an orphaned NEW
+    staged file while the queue was marked resolved. The merge itself
+    (OLD body = NEW body) HAS succeeded at that point, so the data is safe;
+    however an orphaned NEW file is a real defect: it will re-trigger
+    detection / clutter _staged/ and the contradiction looks resolved but
+    isn't fully cleaned up. Decision: treat unlink failure as a FAILURE
+    (return False) so _mark_resolved is NOT called and the user sees the
+    error and can retry / remove the orphan manually. ``missing_ok=True``
+    means an already-absent NEW is fine (idempotent re-run); only a real
+    OSError (e.g. permission) propagates as False.
+    """
     new_text = _read_text(new_path)
     old_text = _read_text(old_path)
     if new_text is None or old_text is None:
@@ -195,54 +289,97 @@ def _apply_update(new_path: Path, old_path: Path) -> bool:
     _, new_body = _split_frontmatter(new_text)
     if not old_fm:
         return False
-    # Atomic write for OLD
-    tmp = old_path.with_suffix(old_path.suffix + ".tmp")
+    # Atomic write for OLD (pid-suffixed tmp avoids concurrent-resolve races).
+    tmp = old_path.with_suffix(f"{old_path.suffix}.{os.getpid()}.tmp")
     tmp.write_text(f"---\n{old_fm}\n---\n\n{new_body.lstrip()}", encoding="utf-8")
     os.replace(tmp, old_path)
-    # Delete NEW (best-effort; missing_ok)
+    # Delete NEW. missing_ok tolerates already-gone; any other OSError is a
+    # failure (orphan left behind) — surface it so the queue stays unresolved.
     try:
         new_path.unlink(missing_ok=True)
     except OSError:
-        pass
+        return False
+    return True
+
+
+def _row_matches_target(row: dict, target_item: dict) -> bool:
+    """Precise unresolved-row match for _mark_resolved (Fix I-mark-resolved-dup).
+
+    The previous match used only the (new_slug, target_name) 2-tuple. Two queue
+    rows can legitimately share that tuple (the same pair flagged by both the
+    SessionEnd writer and the backfill pass, with different kind/ts/reason), so
+    resolving the row at index 2 could mark index 1's row instead.
+
+    We disambiguate by requiring EVERY scalar field present in target_item to
+    match on the candidate row (excluding ``resolved`` itself — the target is
+    the unresolved instance we picked from _load_unresolved). This is a
+    superset of the old tuple and includes ts/kind/reason/confidence, which
+    distinguishes duplicates. Non-scalar fields are compared by equality.
+    """
+    if row.get("resolved"):
+        return False
+    for k, v in target_item.items():
+        if k == "resolved":
+            continue
+        if row.get(k) != v:
+            return False
     return True
 
 
 def _mark_resolved(target_item: dict, new_status: str) -> bool:
     """Rewrite contradictions.jsonl with the target row's resolved field updated.
 
-    Atomic: tmp + os.replace. Matches first unresolved row whose
-    (new_slug, target_name) tuple matches target_item.
+    Atomic: pid-suffixed tmp + os.replace.
+
+    Fix I-jsonl-loss: operate on RAW file lines, NOT load_all() output.
+    load_all() silently drops malformed lines, and the previous implementation
+    rewrote the queue from that filtered list — so resolving any row
+    PERMANENTLY deleted every unparseable line (a single hand-edit typo →
+    silent data loss). We now read the raw lines, parse each individually,
+    mutate only the matched target line, and write ALL lines back including
+    unparseable ones verbatim. Invariant: resolving one row never drops
+    another row, parseable or not.
+
+    Fix I-mark-resolved-dup: match via _row_matches_target (full-field
+    composite) instead of the (new_slug, target_name) 2-tuple.
 
     Returns True if a row was marked, False otherwise.
     """
     import fcntl
 
     p = _queue_path()
-    all_items = load_all()
+    if not p.exists():
+        return False
+    raw_lines = p.read_text(encoding="utf-8").splitlines()
+
+    out_lines: list[str] = []
     matched = False
-    for d in all_items:
-        if (
-            d.get("new_slug") == target_item.get("new_slug")
-            and d.get("target_name") == target_item.get("target_name")
-            and not d.get("resolved")
-        ):
+    for line in raw_lines:
+        if not line.strip():
+            # preserve blank lines verbatim
+            out_lines.append(line)
+            continue
+        try:
+            d = json.loads(line)
+        except json.JSONDecodeError:
+            # Fix I-jsonl-loss: keep malformed lines verbatim, never drop them.
+            out_lines.append(line)
+            continue
+        if not matched and _row_matches_target(d, target_item):
             d["resolved"] = new_status
             matched = True
-            break
+        out_lines.append(json.dumps(d, ensure_ascii=False))
     if not matched:
         return False
 
-    tmp = p.with_suffix(".jsonl.tmp")
+    tmp = p.with_suffix(f".jsonl.{os.getpid()}.tmp")
     try:
         with tmp.open("w", encoding="utf-8") as f:
             try:
                 fcntl.flock(f.fileno(), fcntl.LOCK_EX)
             except OSError:
                 pass  # best-effort lock
-            f.write(
-                "\n".join(json.dumps(d, ensure_ascii=False) for d in all_items)
-                + "\n"
-            )
+            f.write("\n".join(out_lines) + "\n")
         os.replace(tmp, p)
     except OSError:
         return False
