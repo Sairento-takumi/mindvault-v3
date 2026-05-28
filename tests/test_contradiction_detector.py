@@ -428,3 +428,64 @@ def test_classify_valid_confidence_preserved(monkeypatch):
     result = _classify_pair("a", "b")
     assert result is not None
     assert result["confidence"] == 0.92
+
+
+# --- sweep round2: _call_gemma_for_classify must guard non-dict choices/message ---
+# monkeypatch target: src.contradiction_detector.urllib.request.urlopen
+# (module uses `import urllib.request`, so urlopen is attribute of urllib.request)
+
+class _FakeResp:
+    """Minimal context-manager stub for urlopen returning controlled JSON."""
+
+    def __init__(self, payload):
+        import json as _json
+        self._raw = _json.dumps(payload).encode("utf-8")
+
+    def read(self):
+        return self._raw
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def test_call_gemma_handles_nondict_choice(monkeypatch):
+    """choices[0] being a non-dict (str) must return None, not raise AttributeError."""
+    from src import contradiction_detector
+    monkeypatch.setattr(
+        contradiction_detector.urllib.request, "urlopen",
+        lambda req, timeout=None: _FakeResp({"choices": ["just a string"]}),
+    )
+    assert contradiction_detector._call_gemma_for_classify("prompt") is None
+
+
+def test_call_gemma_handles_null_choice(monkeypatch):
+    """choices[0] being null must return None, not raise."""
+    from src import contradiction_detector
+    monkeypatch.setattr(
+        contradiction_detector.urllib.request, "urlopen",
+        lambda req, timeout=None: _FakeResp({"choices": [None]}),
+    )
+    assert contradiction_detector._call_gemma_for_classify("prompt") is None
+
+
+def test_call_gemma_handles_nondict_message(monkeypatch):
+    """message being a non-dict (str) must return None, not raise."""
+    from src import contradiction_detector
+    monkeypatch.setattr(
+        contradiction_detector.urllib.request, "urlopen",
+        lambda req, timeout=None: _FakeResp({"choices": [{"message": "not a dict"}]}),
+    )
+    assert contradiction_detector._call_gemma_for_classify("prompt") is None
+
+
+def test_call_gemma_valid_response_still_works(monkeypatch):
+    """Regression: a normal valid response still returns trimmed content."""
+    from src import contradiction_detector
+    monkeypatch.setattr(
+        contradiction_detector.urllib.request, "urlopen",
+        lambda req, timeout=None: _FakeResp({"choices": [{"message": {"content": "  hello  "}}]}),
+    )
+    assert contradiction_detector._call_gemma_for_classify("prompt") == "hello"

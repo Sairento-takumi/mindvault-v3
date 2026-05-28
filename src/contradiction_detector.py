@@ -234,9 +234,12 @@ def _call_gemma_for_classify(prompt: str, max_tokens: int = 400) -> str | None:
         return None
 
     choices = data.get("choices") or []
-    if not choices:
+    if not choices or not isinstance(choices[0], dict):
         return None
-    content = (choices[0].get("message") or {}).get("content") or ""
+    message = choices[0].get("message")
+    if not isinstance(message, dict):
+        return None
+    content = message.get("content") or ""
     return content.strip() or None
 
 
