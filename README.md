@@ -2,7 +2,7 @@
 
 > Claude Code의 영구 기억 시스템. 5-layer 파이프라인으로 세션 요약 자동 주입 · 자연어 검색 · Memory Compiler · 자동 회수 · 모순 감지까지.
 
-**v3.4.0** · Karpathy LLM-as-Compiler 패턴 실증 · macOS (Apple Silicon) · MIT license · 533 passed + 25 subtests
+**v3.4.1** · Karpathy LLM-as-Compiler 패턴 실증 · macOS (Apple Silicon) · MIT license · 599 passed + 25 subtests
 
 ---
 
