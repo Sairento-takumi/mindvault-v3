@@ -88,6 +88,17 @@ def parse_frontmatter(text: str) -> tuple[dict, str]:
     return meta, body
 
 
+def _fm_oneline(value) -> str:
+    """frontmatter 스칼라 값을 단일 라인으로 정규화 (session-hooks-frontmatter-1).
+
+    cmd_approve 가 영구 메모리 frontmatter 를 raw 보간으로 다시 쓰는 critical path
+    방어용. parse_frontmatter 가 라인 파서라 값은 이미 단일 라인이지만, 줄바꿈이
+    섞인 값이 어떤 경로로든 흘러들어도 frontmatter 구조가 깨지지 않게 한다. 따옴표는
+    쓰지 않아 라인 파서(first-colon split)와 호환.
+    """
+    return re.sub(r"\s+", " ", str(value).replace("\r", " ").replace("\n", " ")).strip()
+
+
 def _iter_staged_files():
     """양쪽 staged 디렉토리에서 .md 순회. 시간 안정 정렬."""
     files: list[Path] = []
@@ -386,8 +397,8 @@ def cmd_approve(filename: str) -> int:
                 }
                 final_fm = (
                     "---\n"
-                    f"name: {existing_meta.get('name', meta.get('name', slug))}\n"
-                    f"description: {existing_meta.get('description', meta.get('description', slug))}\n"
+                    f"name: {_fm_oneline(existing_meta.get('name', meta.get('name', slug)))}\n"
+                    f"description: {_fm_oneline(existing_meta.get('description', meta.get('description', slug)))}\n"
                     f"type: {existing_meta.get('type', meta_type)}\n"
                     f"{_supersede_passthrough(passthrough_meta)}"
                     "---\n\n"
@@ -432,8 +443,8 @@ def cmd_approve(filename: str) -> int:
 
         final_fm = (
             "---\n"
-            f"name: {meta.get('name', slug)}\n"
-            f"description: {meta.get('description', meta.get('name', slug))}\n"
+            f"name: {_fm_oneline(meta.get('name', slug))}\n"
+            f"description: {_fm_oneline(meta.get('description', meta.get('name', slug)))}\n"
             f"type: {meta_type}\n"
             # Defect Suspect2: passthrough supersedes/deprecated_by from staged fm.
             f"{_supersede_passthrough(meta)}"

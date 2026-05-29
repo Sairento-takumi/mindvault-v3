@@ -464,6 +464,18 @@ def main() -> int:
                 )
                 _debug(f"received sessionId={received_sid!r} keys={list(hook_data.keys())}")
                 exclude = received_sid or exclude
+                # bug-audit 2026-05-29 (session-hooks-subagent-fire-1): 서브에이전트
+                # SessionStart 는 격리 작업 컨텍스트라 cross-session 메모리 주입이
+                # 불필요한데, 게이팅이 없어 모든 서브에이전트 시작마다 동기 요약
+                # 생성(Gemma 호출, 최대 수십 초)이 서브에이전트를 블로킹했다.
+                # agent_type 이 있으면(=서브에이전트) 즉시 정상 종료한다 (메인 세션은
+                # agent_type 미포함이라 영향 없음).
+                if hook_data.get("agent_type"):
+                    _debug(
+                        f"subagent SessionStart "
+                        f"(agent_type={hook_data.get('agent_type')!r}); skip summary"
+                    )
+                    return 0
             except json.JSONDecodeError as e:
                 _debug(f"hook_input json parse failed: {e}")
 
@@ -508,6 +520,10 @@ def main() -> int:
         emit_output(summary)
         cache_purge_old()
         trigger_background_indexer()
+        # bug-audit 2026-05-29 (session-hooks-purge-staged-miss-1): HIT 경로(483)는
+        # purge_staged_memory() 를 호출하는데 MISS 성공 경로에선 누락돼 staged 청소가
+        # cache HIT 일 때만 일어났다. 두 경로 모두 청소되도록 추가 (idempotent·방어적).
+        purge_staged_memory()
         return 0
     except Exception as e:
         _debug(f"FATAL {e}\n{traceback.format_exc()}")

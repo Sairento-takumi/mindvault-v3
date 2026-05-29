@@ -99,6 +99,16 @@ def slugify(title: str) -> str:
     return slug[:30] or "memory"
 
 
+def _fm_oneline(value) -> str:
+    """frontmatter 스칼라 값을 단일 라인으로 정규화 (session-hooks-frontmatter-1).
+
+    줄바꿈/캐리지리턴을 공백으로 치환하고 연속 공백을 하나로 접은 뒤 strip. 라인
+    기반 frontmatter 가 LLM 값의 줄바꿈으로 깨지는 것을 막는다. 따옴표는 쓰지 않아
+    (콜론 포함 값도) naive first-colon split 파서와 호환.
+    """
+    return re.sub(r"\s+", " ", str(value).replace("\r", " ").replace("\n", " ")).strip()
+
+
 def existing_slugs() -> set[str]:
     slugs: set[str] = set()
     for d in (MEMORY_DIR, STAGED_DIR, PROCEDURAL_DIR, PROCEDURAL_STAGED_DIR):
@@ -119,21 +129,28 @@ def write_staged(
     ts = time.strftime("%Y%m%d-%H%M%S")
     filename = f"{ts}_{item['type']}_{slug}.md"
     path = staged_dir / filename
+    # bug-audit 2026-05-29 (session-hooks-frontmatter-1): LLM 이 만든 값에 줄바꿈이
+    # 섞이면 라인 기반 frontmatter 구조가 깨진다 — 값 안의 '\n' 이 가짜 키 라인을
+    # 만들거나, 값이 '---' 를 포함하면 frontmatter 가 조기 종료돼 다음 /memory_review
+    # 파서가 본문/메타를 오독한다. 각 값을 단일 라인으로 정규화한다. 콜론은 라인
+    # 파서가 first-colon split 이라 값에 남아도 안전하므로 따옴표로 감싸지 않는다
+    # (따옴표를 쓰면 naive 파서가 따옴표를 값에 포함시켜 새 artifact 발생).
+    title = _fm_oneline(item["title"])
     fm_lines = [
-        f"name: {item['title']}",
-        f"description: {item['title']}",
-        f"type: {item['type']}",
+        f"name: {title}",
+        f"description: {title}",
+        f"type: {_fm_oneline(item['type'])}",
         f"staged_at: {time.strftime('%Y-%m-%dT%H:%M:%S')}",
         f"staged_from_session: {session_id[:8]}",
-        f"reason: {item['reason']}",
-        f"evidence: {item['evidence']}",
+        f"reason: {_fm_oneline(item['reason'])}",
+        f"evidence: {_fm_oneline(item['evidence'])}",
     ]
     # Sprint 14: memory compiler 가 부착한 update 메타 보존. review CLI 가
     # update_of 보고 diff/approve 분기.
     if item.get("update_of"):
-        fm_lines.append(f"update_of: {item['update_of']}")
+        fm_lines.append(f"update_of: {_fm_oneline(item['update_of'])}")
     if item.get("diff_summary"):
-        fm_lines.append(f"diff_summary: {item['diff_summary']}")
+        fm_lines.append(f"diff_summary: {_fm_oneline(item['diff_summary'])}")
     frontmatter = "---\n" + "\n".join(fm_lines) + "\n---\n\n" + f"{item['body']}\n"
     # v3.2.6 H2: atomic write — tmp + os.replace 로 partial markdown 차단.
     # crash 직전 write_text 가 절반만 flush 되면 다음 /memory_review 가
