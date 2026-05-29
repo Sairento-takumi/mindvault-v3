@@ -23,11 +23,24 @@ from pathlib import Path
 
 # self_eval 의 load_turns / iter_session_jsonl_paths 재사용
 sys.path.insert(0, str(Path(__file__).parent))
-from self_eval import (  # noqa: E402
-    DEFAULT_PROJECTS_ROOT,
-    iter_session_jsonl_paths,
-    load_turns,
-)
+try:
+    from self_eval import (  # noqa: E402
+        DEFAULT_PROJECTS_ROOT,
+        iter_session_jsonl_paths,
+        load_turns,
+    )
+except ImportError:
+    # bug-audit 2026-05-29 (turns-cache-deploy-dead-import-1): self_eval 은
+    # flat-deploy(~/.claude/scripts/mindvault)에 배포되지 않는다 (eval 전용 모듈).
+    # turns_cache 는 self_eval --use-cache opt-in 경로에서만 쓰이고 운영 자동
+    # 경로엔 호출자가 없으므로, 배포 환경에서 import 만으로 ModuleNotFoundError 로
+    # 죽던 것을 막는다. 실제 기능(refresh_cache 등)은 self_eval 이 있는 repo/eval
+    # 컨텍스트에서만 호출된다. DEFAULT_PROJECTS_ROOT 는 다른 모듈과 동일 fallback.
+    DEFAULT_PROJECTS_ROOT = Path(
+        os.environ.get("MV3_PROJECTS_ROOT", "~/.claude/projects")
+    ).expanduser()
+    iter_session_jsonl_paths = None  # type: ignore
+    load_turns = None  # type: ignore
 
 # v3.2.7: production state pollution 방지. MV3_DATA_DIR env var 우선.
 _MV3_DATA_DIR = Path(os.environ.get("MV3_DATA_DIR", "~/.claude/mindvault-v3")).expanduser()
@@ -94,7 +107,8 @@ def refresh_cache(
         for jp in iter_session_jsonl_paths(projects_root):
             scanned += 1
             try:
-                mtime_ns = jp.stat().st_mtime_ns
+                st = jp.stat()
+                mtime_ns = st.st_mtime_ns
             except OSError:
                 skipped += 1
                 continue
@@ -107,6 +121,23 @@ def refresh_cache(
                 continue
             # 해당 path 의 기존 turns 모두 삭제 후 재 insert
             turns = load_turns(jp)
+            # bug-audit 2026-05-29 (turns-cache-readfail-wipe-1): jsonl 은 append-only
+            # (docstring 불변식)라 turn 이 정상적으로 0건이 되는 일은 없다. 파일이
+            # 비어있지 않고(st_size>0) 이전에 캐시된 turn 이 있었는데 load_turns 가
+            # []를 반환하면 일시적 read 실패일 가능성이 높다. 이때 기존 turns 를 지우고
+            # mtime 까지 갱신하면 그 jsonl 의 turn 이 영구 소실(다음 refresh 가 mtime
+            # 일치로 skip)되므로, 이번 path 를 건너뛰어 다음 refresh 가 재시도하게 한다.
+            if not turns and st.st_size > 0:
+                prev = conn.execute(
+                    "SELECT COUNT(*) FROM turns WHERE jsonl_path=?", (str(jp),)
+                ).fetchone()[0]
+                if prev > 0:
+                    _debug(
+                        f"empty parse on non-empty file with {prev} cached turns, "
+                        f"defer: {jp.name}"
+                    )
+                    skipped += 1
+                    continue
             conn.execute(
                 "DELETE FROM turns WHERE jsonl_path=?", (str(jp),)
             )

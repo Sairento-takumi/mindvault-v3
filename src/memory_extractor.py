@@ -322,18 +322,77 @@ def build_prompt(messages: list[dict]) -> str:
     )
 
 
+def _iter_balanced_arrays(text: str):
+    """text 안의 모든 balanced [...] 후보를 파싱 시도, list 인 것만 yield.
+
+    bug-audit 2026-05-29 (extractor-greedy-json-1): 이전 `re.search(r"\\[[\\s\\S]*\\]")`
+    는 greedy 라 배열 밖 산문의 대괄호까지 삼켜(예: "[note]: [{...}] (참고 [x])")
+    전체 매칭이 깨지면 valid 후보를 통째로 버렸다. 후보 span 을 하나씩 균형 매칭해
+    파싱 가능한 list 만 골라낸다 — 문자열 내부 대괄호/이스케이프도 정확히 처리.
+    """
+    i, n = 0, len(text)
+    while i < n:
+        if text[i] != "[":
+            i += 1
+            continue
+        depth = 0
+        in_str = esc = False
+        end = -1
+        for j in range(i, n):
+            c = text[j]
+            if in_str:
+                if esc:
+                    esc = False
+                elif c == "\\":
+                    esc = True
+                elif c == '"':
+                    in_str = False
+                continue
+            if c == '"':
+                in_str = True
+            elif c == "[":
+                depth += 1
+            elif c == "]":
+                depth -= 1
+                if depth == 0:
+                    end = j
+                    break
+        if end < 0:
+            return  # 불균형 — 더 볼 후보 없음
+        try:
+            val = json.loads(text[i:end + 1])
+            if isinstance(val, list):
+                yield val
+        except json.JSONDecodeError:
+            pass
+        i = end + 1
+
+
 def parse_gemma_json(out: str) -> list[dict]:
     if not out:
         return []
-    m = re.search(r"\[[\s\S]*\]", out)
-    if not m:
-        return []
+    arr = None
+    # 1순위: 코드펜스만 벗긴 뒤 직접 파싱 (모델이 JSON 만 낸 정상 케이스).
+    stripped = out.strip()
+    fence = re.match(r"^```(?:json)?\s*([\s\S]*?)\s*```$", stripped)
+    if fence:
+        stripped = fence.group(1).strip()
     try:
-        arr = json.loads(m.group(0))
-    except json.JSONDecodeError as e:
-        _debug(f"json parse fail: {e}")
-        return []
+        cand = json.loads(stripped)
+        if isinstance(cand, list):
+            arr = cand
+    except json.JSONDecodeError:
+        arr = None
+    # 2순위: 산문이 섞였으면 balanced [...] 후보 중 dict 를 담은 list 우선 선택.
+    if arr is None:
+        for cand in _iter_balanced_arrays(out):
+            if any(isinstance(x, dict) for x in cand):
+                arr = cand
+                break
+            if arr is None:
+                arr = cand  # dict 없는 list 라도 첫 후보 보관 (대개 [])
     if not isinstance(arr, list):
+        _debug("json parse fail: no balanced array")
         return []
     valid = []
     for item in arr:
@@ -435,8 +494,13 @@ def extract_from_jsonl(jsonl_path: Path) -> list[dict]:
         # 첫 호출 비-empty 면 즉시 반환 (latency 최소화). 0건일 때만 retry.
         attempts = 1 + _retries()
         results: list[list[dict]] = []
+        any_call_failed = False  # bug-audit 2026-05-29 (extractor-negcache-1)
         for i in range(attempts):
             out = call_gemma(prompt)
+            if out is None:
+                # 전송 실패/빈 응답 (서버 다운·timeout·finish_reason=length). legit
+                # "후보 없음" 은 Gemma 가 "[]" 를 반환하므로 None 과 구분된다.
+                any_call_failed = True
             parsed = parse_gemma_json(out) if out else []
             results.append(parsed)
             if parsed:
@@ -459,11 +523,18 @@ def extract_from_jsonl(jsonl_path: Path) -> list[dict]:
                 f"{[len(r) for r in results]}"
             )
         # NEXT-16: 결과 캐시 저장 — 빈 list 도 저장 (다음 호출 재시도 비용 회피).
-        if cache_put is not None:
+        # bug-audit 2026-05-29 (extractor-negcache-1): 단, Gemma 호출 자체가 실패한
+        # 빈 결과(서버 다운)는 캐시하지 않는다 — 캐시하면 서버 복구 후에도 같은 세션이
+        # 영구히 추출 스킵돼 데이터가 유실된다. "서버가 응답했으나 후보 0건"(out="[]")
+        # 은 정상 빈 결과라 그대로 캐시한다.
+        skip_negative_cache = any_call_failed and not merged
+        if cache_put is not None and not skip_negative_cache:
             try:
                 cache_put(prompt, merged)
             except Exception as e:
                 _debug(f"cache_put fail (graceful): {type(e).__name__}: {e}")
+        elif skip_negative_cache:
+            _debug(f"skip caching empty result (gemma call failed) for {jsonl_path.name}")
         return merged
     except Exception as e:
         _debug(f"extract FATAL: {e}\n{traceback.format_exc()}")
