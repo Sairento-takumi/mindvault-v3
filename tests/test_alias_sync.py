@@ -212,6 +212,23 @@ class TestDiscoverMemoryDirs(unittest.TestCase):
         self.assertEqual(count, 1)
 
 
+class TestCallClaudeRecursionGuard(unittest.TestCase):
+    """bug-audit 2026-05-29 (session-hooks-recursion-guard-end-1): 자식 claude 에
+    MV3_HOOK_RECURSION_GUARD=1 을 전파해 nested 훅 재귀 방지."""
+
+    def test_call_claude_sets_recursion_guard_env(self):
+        import alias_generator
+        from unittest.mock import MagicMock
+        fake = MagicMock()
+        fake.returncode = 1  # 빠른 반환 (파싱 안 해도 됨)
+        fake.stdout = ""
+        with patch.object(alias_generator.subprocess, "run", return_value=fake) as run:
+            alias_generator._call_claude("desc", "body")
+        env = run.call_args.kwargs.get("env")
+        self.assertIsNotNone(env, "env 가 전달되지 않음")
+        self.assertEqual(env.get("MV3_HOOK_RECURSION_GUARD"), "1")
+
+
 class TestExtractMemoryMetaUnquote(unittest.TestCase):
     """bug-audit 2026-05-29 (embeddings-alias-7): frontmatter 값의 양끝 따옴표 제거."""
 

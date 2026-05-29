@@ -188,6 +188,13 @@ def _call_claude(desc: str, body: str, model: str = "sonnet") -> list[str]:
         "--disable-slash-commands",
         "--no-session-persistence",
     ]
+    # bug-audit 2026-05-29 (session-hooks-recursion-guard-end-1): 자식 `claude`
+    # 프로세스에 recursion guard 를 전파. alias 생성이 SessionEnd 파이프라인에서
+    # provider="claude" 로 호출되면, 여기서 spawn 되는 claude 가 자기 SessionStart/End
+    # 훅을 다시 fire → 메모리 파이프라인 무한 재귀. guard env 를 심어 nested 훅이
+    # 즉시 skip 하게 한다 (session_memory*.py / async wrapper 가 이 변수를 본다).
+    _child_env = os.environ.copy()
+    _child_env["MV3_HOOK_RECURSION_GUARD"] = "1"
     try:
         r = subprocess.run(
             cmd,
@@ -195,6 +202,7 @@ def _call_claude(desc: str, body: str, model: str = "sonnet") -> list[str]:
             text=True,
             timeout=CLAUDE_TIMEOUT,
             stdin=subprocess.DEVNULL,  # "no stdin" 경고 차단
+            env=_child_env,
         )
     except subprocess.TimeoutExpired:
         _debug(f"claude call timeout (>{CLAUDE_TIMEOUT}s)")
