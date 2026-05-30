@@ -88,3 +88,67 @@ def test_recall_attaches_provenance(tmp_path):
     assert results[0]["provenance"]["source_type"] == "session"
     assert results[0]["provenance"]["source_ref"] == "abcd1234-5678-90ab-cdef-111122223333"
     assert results[0]["provenance"]["captured_at"] == datetime.datetime(2026, 5, 30, 10, 0)
+
+
+# ─── Task 3: _format_output 출처 라벨 ────────────────────────────────────────
+
+HOOK_PATH = Path(__file__).parent.parent / "hooks" / "memory-recall.py"
+
+
+def _load_hook():
+    """hooks/memory-recall.py 를 importlib 로 로드 (test_memory_hook.py 패턴 동일)."""
+    spec = importlib.util.spec_from_file_location("hk_prov", HOOK_PATH)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_format_output_shows_source_label():
+    hook = _load_hook()
+    results = [{
+        "name": "x", "description": "d", "snippet": "", "score": 0.9,
+        "source": ["vec"],
+        "provenance": {"source_type": "session", "source_ref": "abcd1234-5678-90ab",
+                       "captured_at": "2026-05-30T10:00:00"},
+    }]
+    out = hook._format_output(results)
+    assert "출처:" in out
+    assert "session" in out
+
+
+def test_format_output_nonstring_source_type_does_not_crash():
+    hook = _load_hook()
+    results = [{
+        "name": "x", "description": "d", "snippet": "", "score": 0.9,
+        "source": ["vec"],
+        "provenance": {"source_type": True, "source_ref": None, "captured_at": None},
+    }]
+    out = hook._format_output(results)  # must not raise
+    assert "출처:" in out
+    assert "True" in out
+
+
+def test_format_output_unknown_source_suppressed():
+    hook = _load_hook()
+    results = [{
+        "name": "x", "description": "d", "snippet": "", "score": 0.9,
+        "source": ["vec"],
+        "provenance": {"source_type": "unknown", "source_ref": None, "captured_at": None},
+    }]
+    out = hook._format_output(results)
+    assert "출처:" not in out  # unknown → no label (noise suppression)
+
+
+def test_format_output_datetime_captured_at():
+    import datetime
+    hook = _load_hook()
+    results = [{
+        "name": "x", "description": "d", "snippet": "", "score": 0.9,
+        "source": ["vec"],
+        "provenance": {"source_type": "session", "source_ref": "abcd1234ef",
+                       "captured_at": datetime.datetime(2026, 5, 30, 10, 0)},
+    }]
+    out = hook._format_output(results)
+    assert "출처: session" in out
+    assert "2026-05-30" in out      # datetime str()[:10]
+    assert "abcd1234" in out and "abcd1234e" not in out  # ref truncated to 8 chars

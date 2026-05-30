@@ -336,6 +336,11 @@ def _format_output(results: list[dict]) -> str:
         snippet = _sanitize(r.get("snippet") or "")
         score = r.get("score", 0)
         lines.append(f"- [{name}] (score {score:.2f}, {srcs}) — {desc}")
+        prov = r.get("provenance") or {}
+        if prov.get("source_type") and prov["source_type"] != "unknown":
+            ref = _sanitize(str(prov.get("source_ref") or "")[:8])
+            cap = _sanitize(str(prov.get("captured_at") or "")[:10])
+            lines.append(f"  출처: {_sanitize(str(prov['source_type']))} {ref} {cap}".rstrip())
         if snippet:
             lines.append(f"  발췌: {snippet}")
     lines.append("")
