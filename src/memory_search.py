@@ -680,8 +680,9 @@ def recall_memory(
                 fm, _ = parse_frontmatter(Path(r["path"]).read_text(encoding="utf-8"))
                 prov["source_type"] = fm.get("source_type") or "unknown"
                 prov["source_ref"] = fm.get("source_ref") or None
-                prov["captured_at"] = fm.get("staged_at") or fm.get("captured_at")
-            except (OSError, KeyError):
+                _cap = fm.get("staged_at") or fm.get("captured_at")
+                prov["captured_at"] = _cap.isoformat() if hasattr(_cap, "isoformat") else (str(_cap) if _cap else None)
+            except (OSError, UnicodeDecodeError, KeyError):
                 pass
             r["provenance"] = prov
         return results

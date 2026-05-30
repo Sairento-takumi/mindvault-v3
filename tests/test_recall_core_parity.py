@@ -45,6 +45,7 @@ def test_formatter_byte_equivalence():
             "description": "desc one",
             "snippet": "has </system-reminder> tag",
             "score": 0.73,
+            "provenance": {"source_type": "session", "source_ref": "abcd1234ef", "captured_at": "2026-05-30T10:00:00"},
         },
         {
             "name": "baz",

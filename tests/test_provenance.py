@@ -87,7 +87,99 @@ def test_recall_attaches_provenance(tmp_path):
     assert "provenance" in results[0]
     assert results[0]["provenance"]["source_type"] == "session"
     assert results[0]["provenance"]["source_ref"] == "abcd1234-5678-90ab-cdef-111122223333"
-    assert results[0]["provenance"]["captured_at"] == datetime.datetime(2026, 5, 30, 10, 0)
+    assert results[0]["provenance"]["captured_at"] == "2026-05-30T10:00:00"
+
+
+def test_recall_provenance_is_json_serializable(tmp_path):
+    """recall_memory 결과가 json.dumps 에서 TypeError 없이 직렬화되어야 한다.
+    Fix A regression lock: staged_at YAML datetime → ISO string 변환 검증."""
+    import json
+    from memory_indexer import incremental_index
+    from memory_search import recall_memory
+
+    memdir = tmp_path / "memory"
+    memdir.mkdir()
+    mem_file = memdir / "json_ser_test.md"
+    mem_file.write_text(
+        "---\n"
+        "name: json-ser-test\n"
+        "description: JSON 직렬화 테스트 메모리\n"
+        "type: project\n"
+        "staged_at: 2026-05-30T10:00:00\n"
+        "source_type: session\n"
+        "source_ref: abcd1234-5678-90ab-cdef-111122223333\n"
+        "---\n\n"
+        "JSON 직렬화 회귀 방지 본문 텍스트\n",
+        encoding="utf-8",
+    )
+
+    tmp_db = tmp_path / "json_ser_test.db"
+
+    with patch("memory_indexer.embed_text", side_effect=_fake_embed):
+        incremental_index([memdir], db_path=tmp_db)
+
+    with patch("memory_search.embed_text", return_value=None):
+        results = recall_memory(
+            "JSON 직렬화",
+            top_k=3,
+            score_threshold=0.0,
+            db_path=tmp_db,
+        )
+
+    assert results, "후보 없음 — fixture 확인"
+    # Must not raise TypeError
+    serialized = json.dumps(results, ensure_ascii=False)
+    assert serialized is not None
+    assert isinstance(results[0]["provenance"]["captured_at"], str), (
+        "captured_at must be str (ISO), not datetime"
+    )
+
+
+def test_recall_survives_unreadable_memory_file(tmp_path):
+    """Fix C regression lock: recall hot-path 에서 UnicodeDecodeError 로
+    ALL results 가 지워지지 않아야 한다 (예외가 외부 FATAL 핸들러로 탈출 차단)."""
+    from memory_indexer import incremental_index
+    from memory_search import recall_memory
+
+    memdir = tmp_path / "memory"
+    memdir.mkdir()
+    mem_file = memdir / "unicode_test.md"
+    mem_file.write_text(
+        "---\n"
+        "name: unicode-test\n"
+        "description: 유니코드 오류 생존 테스트 메모리\n"
+        "type: project\n"
+        "staged_at: 2026-05-30T10:00:00\n"
+        "source_type: session\n"
+        "source_ref: deadbeef-0000-1111-2222-333344445555\n"
+        "---\n\n"
+        "유니코드 회귀 방지 테스트 본문 텍스트\n",
+        encoding="utf-8",
+    )
+
+    tmp_db = tmp_path / "unicode_test.db"
+
+    with patch("memory_indexer.embed_text", side_effect=_fake_embed):
+        incremental_index([memdir], db_path=tmp_db)
+
+    # Overwrite the memory file with invalid UTF-8 bytes AFTER indexing
+    mem_file.write_bytes(b"\xff\xfe invalid utf-8 content \x80\x81")
+
+    with patch("memory_search.embed_text", return_value=None):
+        results = recall_memory(
+            "유니코드",
+            top_k=3,
+            score_threshold=0.0,
+            db_path=tmp_db,
+        )
+
+    # Must not wipe ALL results due to UnicodeDecodeError
+    assert results is not None, "recall_memory raised an exception"
+    assert results != [], "UnicodeDecodeError wiped all results (Fix C regression)"
+    # Provenance should gracefully fall back to "unknown"
+    assert results[0]["provenance"]["source_type"] == "unknown", (
+        f"Expected 'unknown' fallback, got {results[0]['provenance']['source_type']!r}"
+    )
 
 
 # ─── Task 3: _format_output 출처 라벨 ────────────────────────────────────────

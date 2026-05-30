@@ -52,7 +52,7 @@ def main() -> int:
             out["memory"] = []
         if args.source in ("sessions", "both"):
             out["sessions"] = []
-        sys.stdout.write(json.dumps(out, ensure_ascii=False))
+        sys.stdout.write(json.dumps(out, ensure_ascii=False, default=str))
         return 0
 
     if args.source in ("memory", "both"):
@@ -60,7 +60,7 @@ def main() -> int:
     if args.source in ("sessions", "both"):
         out["sessions"] = _search_sessions(query, top_k=3)
 
-    sys.stdout.write(json.dumps(out, ensure_ascii=False))
+    sys.stdout.write(json.dumps(out, ensure_ascii=False, default=str))
     return 0
 
 

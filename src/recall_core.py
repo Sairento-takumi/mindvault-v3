@@ -89,6 +89,11 @@ def format_memory_context(
         snippet = sanitize(r.get("snippet") or "")
         score = r.get("score", 0)
         body.append(f"- [{name}] (score {score:.2f}, {srcs}) — {desc}")
+        prov = r.get("provenance") or {}
+        if prov.get("source_type") and prov["source_type"] != "unknown":
+            ref = sanitize(str(prov.get("source_ref") or "")[:8])
+            cap = sanitize(str(prov.get("captured_at") or "")[:10])
+            body.append(f"  출처: {sanitize(str(prov['source_type']))} {ref} {cap}".rstrip())
         if snippet:
             body.append(f"  발췌: {snippet}")
     body.append("")
