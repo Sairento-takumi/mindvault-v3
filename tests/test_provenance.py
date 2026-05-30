@@ -152,3 +152,49 @@ def test_format_output_datetime_captured_at():
     assert "출처: session" in out
     assert "2026-05-30" in out      # datetime str()[:10]
     assert "abcd1234" in out and "abcd1234e" not in out  # ref truncated to 8 chars
+
+
+# ─── Task 4: 기존 메모리 backfill CLI ───────────────────────────────────────
+
+
+def test_backfill_adds_source_from_staged_session(tmp_path):
+    from src import provenance_backfill_cli as bf
+    mem = tmp_path / "memory"; mem.mkdir()
+    p = mem / "feedback_x.md"
+    p.write_text("---\nname: x\ntype: feedback\nstaged_from_session: abcd1234\n---\n\nbody\n")
+    n = bf.backfill_dir(mem, dry_run=False)
+    assert n == 1
+    text = p.read_text()
+    assert "source_type: session" in text
+    assert "source_ref: abcd1234" in text
+
+
+def test_backfill_unknown_when_no_session(tmp_path):
+    from src import provenance_backfill_cli as bf
+    mem = tmp_path / "memory"; mem.mkdir()
+    p = mem / "reference_y.md"
+    p.write_text("---\nname: y\ntype: reference\n---\n\nbody\n")
+    bf.backfill_dir(mem, dry_run=False)
+    assert "source_type: unknown" in p.read_text()
+    assert "source_ref" not in p.read_text()
+
+
+def test_backfill_dry_run_no_write(tmp_path):
+    from src import provenance_backfill_cli as bf
+    mem = tmp_path / "memory"; mem.mkdir()
+    p = mem / "feedback_z.md"
+    original = "---\nname: z\ntype: feedback\nstaged_from_session: eeee9999\n---\n\nbody\n"
+    p.write_text(original)
+    n = bf.backfill_dir(mem, dry_run=True)
+    assert n == 1  # 대상 건수는 반환
+    assert p.read_text() == original  # 파일 내용 불변
+
+
+def test_backfill_skips_unreadable_file(tmp_path):
+    from src import provenance_backfill_cli as bf
+    mem = tmp_path / "memory"; mem.mkdir()
+    bad = mem / "bad.md"
+    bad.write_bytes(b"\xff\xfe not valid utf-8 \x80\x81")
+    # must not raise; bad file simply not counted
+    n = bf.backfill_dir(mem, dry_run=False)
+    assert n == 0
