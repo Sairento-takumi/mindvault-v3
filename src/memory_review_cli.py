@@ -214,6 +214,31 @@ def _supersede_passthrough(meta: dict) -> str:
     return extra
 
 
+def _provenance_passthrough(meta: dict) -> str:
+    """Phase 1 provenance fix: preserve ``source_type``, ``source_ref``, and
+    ``captured_at`` (derived from ``staged_at``) through cmd_approve promotion.
+
+    write_staged embeds these keys in every staged file, but cmd_approve was
+    rebuilding frontmatter from scratch and stripping them — breaking the
+    completion gate "신규 영구기억 출처 추적률 100%".
+
+    Mirrors ``_supersede_passthrough`` exactly: verbatim re-emit via
+    ``_fm_oneline``, trailing-newline-terminated (or "" when absent).
+    """
+    extra = ""
+    source_type = (meta.get("source_type") or "").strip()
+    if source_type:
+        extra += f"source_type: {_fm_oneline(source_type)}\n"
+    source_ref = (meta.get("source_ref") or "").strip()
+    if source_ref:
+        extra += f"source_ref: {_fm_oneline(source_ref)}\n"
+    # recall_memory derives provenance.captured_at from staged_at OR captured_at
+    captured_at = (meta.get("staged_at") or meta.get("captured_at") or "").strip()
+    if captured_at:
+        extra += f"captured_at: {_fm_oneline(captured_at)}\n"
+    return extra
+
+
 def _read_existing_body(path: Path) -> str:
     """기존 memory 파일에서 본문(frontmatter 제외) 추출. 없으면 빈 문자열."""
     try:
@@ -395,12 +420,32 @@ def cmd_approve(filename: str) -> int:
                     **{k: existing_meta[k] for k in ("supersedes", "deprecated_by") if k in existing_meta},
                     **{k: meta[k] for k in ("supersedes", "deprecated_by") if k in meta},
                 }
+                # UPDATE path: prefer existing target's provenance (preserve
+                # memory's original origin); fall back to staged meta if absent.
+                # _provenance_passthrough reads staged_at then captured_at for
+                # the date field.  We normalise everything into captured_at so
+                # the function emits it correctly regardless of which key the
+                # existing file uses.
+                provenance_meta = {
+                    "source_type": existing_meta.get("source_type") or meta.get("source_type"),
+                    "source_ref": existing_meta.get("source_ref") or meta.get("source_ref"),
+                    # staged_at left empty so _provenance_passthrough falls
+                    # through to captured_at below.
+                    "staged_at": "",
+                    "captured_at": (
+                        existing_meta.get("captured_at")
+                        or existing_meta.get("staged_at")
+                        or meta.get("staged_at")
+                        or meta.get("captured_at")
+                    ),
+                }
                 final_fm = (
                     "---\n"
                     f"name: {_fm_oneline(existing_meta.get('name', meta.get('name', slug)))}\n"
                     f"description: {_fm_oneline(existing_meta.get('description', meta.get('description', slug)))}\n"
                     f"type: {existing_meta.get('type', meta_type)}\n"
                     f"{_supersede_passthrough(passthrough_meta)}"
+                    f"{_provenance_passthrough(provenance_meta)}"
                     "---\n\n"
                     f"{body.rstrip()}\n"
                 )
@@ -448,6 +493,8 @@ def cmd_approve(filename: str) -> int:
             f"type: {meta_type}\n"
             # Defect Suspect2: passthrough supersedes/deprecated_by from staged fm.
             f"{_supersede_passthrough(meta)}"
+            # Phase 1 provenance fix: passthrough source_type/source_ref/captured_at.
+            f"{_provenance_passthrough(meta)}"
             "---\n\n"
             f"{body.rstrip()}\n"
         )

@@ -161,3 +161,143 @@ def test_approve_update_passes_through_supersedes(tmp_path, monkeypatch, capsys)
     assert "supersedes: [some_old]" in content, (
         f"supersedes dropped on update-promote: {content!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 Provenance — source_type/source_ref/captured_at preservation tests
+# ---------------------------------------------------------------------------
+
+def _load_sme(monkeypatch, mem_dir: Path, data_dir: Path):
+    """Load session_memory_end with MEMORY_DIR pointed at tmp paths."""
+    import importlib.util as ilu
+    monkeypatch.setenv("MV3_MEMORY_DIR", str(mem_dir))
+    monkeypatch.setenv("MV3_DATA_DIR", str(data_dir))
+    monkeypatch.delenv("MV3_PROJECTS_DIR", raising=False)
+    monkeypatch.delenv("MV3_PROJECTS_ROOT", raising=False)
+    spec = ilu.spec_from_file_location(
+        f"session_memory_end_{mem_dir.name}", REPO / "src" / "session_memory_end.py"
+    )
+    mod = ilu.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_approve_new_preserves_provenance(tmp_path, monkeypatch, capsys):
+    """NEW-PROMOTE: source_type/source_ref/captured_at must survive into promoted file.
+
+    This is the completion-gate regression: write_staged records provenance into
+    the staged frontmatter, but cmd_approve was rebuilding frontmatter from scratch
+    and stripping source_type/source_ref/staged_at on promotion.
+    """
+    mem = tmp_path / "memory"
+    (mem / "_staged").mkdir(parents=True)
+
+    # Stage via real write_staged so the staged file has the full provenance block.
+    sme = _load_sme(monkeypatch, mem, tmp_path / "data")
+    session_id = "abcdef1234567890abcdef1234567890"
+    staged_path = sme.write_staged(
+        {
+            "title": "prov test note",
+            "type": "feedback",
+            "reason": "test reason",
+            "evidence": "test evidence",
+            "body": "provenance body text",
+        },
+        session_id=session_id,
+        source_type="session",
+        source_ref=session_id,
+    )
+    assert staged_path is not None, "write_staged returned None"
+    assert staged_path.is_file(), "staged file not created"
+
+    # Verify staged file actually has source_type/source_ref/staged_at
+    staged_text = staged_path.read_text(encoding="utf-8")
+    assert "source_type: session" in staged_text, "write_staged did not embed source_type"
+    assert f"source_ref: {session_id}" in staged_text, "write_staged did not embed source_ref"
+    assert "staged_at:" in staged_text, "write_staged did not embed staged_at"
+
+    # Now approve via cmd_approve — reload cli with same env
+    cli = _load_cli(monkeypatch, mem, tmp_path / "data")
+    rc = cli.cmd_approve(staged_path.name)
+    assert rc == 0
+    res = _capture_json(capsys)
+    assert res.get("ok") is True, res
+
+    # Promoted permanent file must carry provenance fields
+    slug = cli._promoted_slug(staged_path.name)
+    promoted = mem / f"{slug}.md"
+    assert promoted.is_file(), f"promoted file missing at {promoted}"
+
+    content = promoted.read_text(encoding="utf-8")
+    assert "source_type: session" in content, (
+        f"source_type stripped on promote:\n{content}"
+    )
+    assert f"source_ref: {session_id}" in content, (
+        f"source_ref stripped on promote:\n{content}"
+    )
+    # captured_at (from staged_at) must be present so recall can render the date
+    assert "captured_at:" in content, (
+        f"captured_at (from staged_at) stripped on promote:\n{content}"
+    )
+    # staged file must be consumed
+    assert not staged_path.exists(), "staged file should be deleted after approve"
+
+
+def test_approve_update_preserves_existing_provenance(tmp_path, monkeypatch, capsys):
+    """UPDATE path: existing target's provenance takes precedence over staged meta.
+
+    When updating an existing permanent memory, the original source_type/source_ref
+    must be preserved (memory's origin doesn't change just because body is refined).
+    """
+    mem = tmp_path / "memory"
+    (mem / "_staged").mkdir(parents=True)
+    monkeypatch.setenv("MV3_EXTRA_MEMORY_DIRS", str(mem))
+
+    cli = _load_cli(monkeypatch, mem, tmp_path / "data")
+
+    # Existing permanent memory WITH its original provenance
+    target = mem / "existing_prov.md"
+    target.write_text(
+        "---\n"
+        "name: Existing Prov\n"
+        "description: existing desc\n"
+        "type: feedback\n"
+        "source_type: session\n"
+        "source_ref: original-session-id-0000\n"
+        "captured_at: 2026-01-01T10:00:00\n"
+        "---\n\n"
+        "old body\n",
+        encoding="utf-8",
+    )
+
+    # Staged update with DIFFERENT source provenance
+    staged = mem / "_staged" / "20260201-000000_feedback_existing_prov.md"
+    staged.write_text(
+        "---\n"
+        "name: Existing Prov\n"
+        "type: feedback\n"
+        f"update_of: {target}\n"
+        "source_type: session\n"
+        "source_ref: new-session-id-9999\n"
+        "staged_at: 2026-02-01T12:00:00\n"
+        "---\n\n"
+        "refined body\n",
+        encoding="utf-8",
+    )
+
+    rc = cli.cmd_approve(staged.name)
+    assert rc == 0
+    res = _capture_json(capsys)
+    assert res.get("ok") is True, res
+    assert res.get("kind") == "update", res
+
+    content = target.read_text(encoding="utf-8")
+    assert "refined body" in content, "update body not merged"
+    # Existing provenance must be preserved (original origin wins)
+    assert "source_type: session" in content, f"source_type missing: {content}"
+    assert "source_ref: original-session-id-0000" in content, (
+        f"existing source_ref was overwritten by staged: {content}"
+    )
+    assert "captured_at: 2026-01-01T10:00:00" in content, (
+        f"existing captured_at was overwritten: {content}"
+    )
