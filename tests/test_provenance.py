@@ -198,3 +198,58 @@ def test_backfill_skips_unreadable_file(tmp_path):
     # must not raise; bad file simply not counted
     n = bf.backfill_dir(mem, dry_run=False)
     assert n == 0
+
+
+# ─── Task 5: end-to-end 통합 (write→index→recall→format 출처 라벨) ─────────────
+
+
+def test_e2e_staged_to_recall_label(tmp_path):
+    """write_staged → index → recall_memory(provenance 부착) → _format_output(출처 라벨)
+    전 구간이 연결되는지 검증하는 end-to-end 통합 테스트."""
+    from memory_indexer import incremental_index
+    from memory_search import recall_memory
+
+    # 1. 격리된 tmp memory dir + source frontmatter 포함 파일 생성
+    memdir = tmp_path / "memory"
+    memdir.mkdir()
+    mem_file = memdir / "e2e_prov_test.md"
+    mem_file.write_text(
+        "---\n"
+        "name: e2e-prov-test\n"
+        "description: end-to-end 출처 추적 테스트 메모리\n"
+        "type: project\n"
+        "staged_at: 2026-05-30T12:00:00\n"
+        "staged_from_session: e2e11111\n"
+        "source_type: session\n"
+        "source_ref: e2e11111-2222-3333-4444-555566667777\n"
+        "---\n\n"
+        "한국어 검색 통합 테스트 본문 텍스트\n",
+        encoding="utf-8",
+    )
+
+    tmp_db = tmp_path / "e2e_test.db"
+
+    # 2. 인덱싱 (_fake_embed로 임베딩 대체)
+    with patch("memory_indexer.embed_text", side_effect=_fake_embed):
+        incremental_index([memdir], db_path=tmp_db)
+
+    # 3. recall_memory 호출 (FTS-only 모드 — embed_text returns None)
+    with patch("memory_search.embed_text", return_value=None):
+        results = recall_memory(
+            "한국어 검색",
+            top_k=3,
+            score_threshold=0.0,
+            db_path=tmp_db,
+        )
+
+    assert results, "recall 후보 없음 — fixture 또는 FTS 쿼리 확인"
+    assert "provenance" in results[0], "recall_memory가 provenance를 부착하지 않음"
+
+    # 4. _format_output으로 출처 라벨 렌더링
+    hook = _load_hook()
+    out = hook._format_output(results)
+
+    # 5. 체인 전체 검증: 출처 라벨 + source_type + source_ref 8자 prefix
+    assert "출처:" in out, f"'출처:' 라벨이 출력에 없음:\n{out}"
+    assert "session" in out, f"'session' source_type이 출력에 없음:\n{out}"
+    assert "e2e11111" in out, f"source_ref 8자 prefix 'e2e11111'이 출력에 없음:\n{out}"
