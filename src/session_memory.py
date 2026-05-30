@@ -583,17 +583,25 @@ def _recent_genuine_turns(transcript: Path, recent_user_turns: int) -> list:
     return [redact(t)[:MAX_MSG_CHARS] for t in recent]
 
 
-def extract_compact_query(transcript: Path,
-                          recent_user_turns: int = COMPACT_RECENT_USER_TURNS) -> str:
-    """현재 세션 transcript 에서 *genuine* user 발화 N개를 합쳐 회수 query 로 만든다.
+def _build_compact_query(transcript: Path,
+                         recent_user_turns: int = COMPACT_RECENT_USER_TURNS) -> tuple:
+    """(capped_turns, query) 반환. handle_compact_reinjection 과 extract_compact_query
+    가 공유해 query 빌드 로직이 두 곳에서 drift 하지 않게 한다.
 
     오염원 제거·per-turn 캡은 _recent_genuine_turns 가 담당. 가장 최근 발화가 길이
     truncation 으로 사라지지 않게 tail-keep (앞에서 자르면 최신이 날아감)."""
     capped = _recent_genuine_turns(transcript, recent_user_turns)
     if not capped:
-        return ""
-    query = "\n".join(capped).strip()
-    return query[-COMPACT_QUERY_MAX_CHARS:]
+        return [], ""
+    query = "\n".join(capped).strip()[-COMPACT_QUERY_MAX_CHARS:]
+    return capped, query
+
+
+def extract_compact_query(transcript: Path,
+                          recent_user_turns: int = COMPACT_RECENT_USER_TURNS) -> str:
+    """현재 세션 transcript 의 genuine user 발화로 회수 query 생성 (_build_compact_query
+    위임 — production 경로와 동일 로직)."""
+    return _build_compact_query(transcript, recent_user_turns)[1]
 
 
 def emit_compact_context(text: str) -> None:
@@ -631,8 +639,15 @@ def handle_compact_reinjection(hook_data: dict) -> int:
         ):
             if d.is_dir() and str(d) not in sys.path:
                 sys.path.insert(0, str(d))
-        import recall_core
-        from memory_search import recall_memory
+        # numpy/sqlite_vec/recall_core 없는 interpreter → 예상된 graceful skip(error 아님).
+        # ImportError 만 별도 outcome 으로 분리해 metric 에서 진짜 버그와 구분.
+        try:
+            import recall_core
+            from memory_search import recall_memory
+        except ImportError as e:
+            _debug(f"compact: 런타임 모듈 import 실패(numpy?) → skip: {e}")
+            _compact_metric("import_skip", t0)
+            return 0
         # query_intent 는 optional — 실패해도 진행
         try:
             from query_intent import classify as _qi_classify, should_skip_recall as _qi_skip
@@ -648,24 +663,24 @@ def handle_compact_reinjection(hook_data: dict) -> int:
         _prev_sigalrm = signal.signal(signal.SIGALRM, _compact_alarm)
         try:
             signal.setitimer(signal.ITIMER_REAL, COMPACT_BUDGET_S)
-            capped = _recent_genuine_turns(transcript, COMPACT_RECENT_USER_TURNS)
+            capped, query = _build_compact_query(transcript)
             if not capped:
                 _debug("compact: genuine user 발화 없음 → skip")
                 _compact_metric("no_turns", t0)
                 return 0
-            query = "\n".join(capped).strip()[-COMPACT_QUERY_MAX_CHARS:]
             if len(query) < COMPACT_MIN_QUERY_LEN:
                 _debug(f"compact: query too short ({len(query)}) → skip")
                 _compact_metric("short_query", t0, query_len=len(query))
                 return 0
 
-            # chat/meta 의도면 스킵 (Layer 4 와 일관 — 토큰낭비 방어). join-blob 이
-            # 아니라 *최신 genuine 턴*만 classify — query_intent 는 단일 prompt 설계라
-            # oldest 턴의 인사말/meta 어구가 전체를 오분류하던 문제 차단.
+            # 최근 genuine 턴이 *전부* chat/meta 일 때만 스킵 (Layer 4 와 일관 — 토큰낭비
+            # 방어). 단일 턴만 보면 (a) oldest 인사말이 전체 억제(옛 join-blob), (b) final
+            # ack("ok")이 substantive 맥락 억제 — 둘 다 오탐. 전부 chat 일 때만 스킵하면
+            # 일부라도 substantive 한 턴이 있으면 회수가 진행된다.
             if _qi_classify is not None and _qi_skip is not None:
                 try:
-                    if _qi_skip(_qi_classify(capped[-1])):
-                        _debug("compact: intent chat/meta (latest turn) → skip")
+                    if all(_qi_skip(_qi_classify(c)) for c in capped):
+                        _debug("compact: 최근 턴 전부 chat/meta → skip")
                         _compact_metric("intent_skip", t0, query_len=len(query))
                         return 0
                 except Exception:
@@ -682,6 +697,9 @@ def handle_compact_reinjection(hook_data: dict) -> int:
                 score_threshold=recall_core.SCORE_THRESHOLD,
                 raw_cosine_min=raw_min,
             )
+            # 네트워크(embed) 끝 — 이후 format/emit/metric 은 local·fast 라 예산 밖으로
+            # 빼 'injected' 가 emit 직후 stray alarm 으로 budget_timeout 오기록되지 않게.
+            signal.setitimer(signal.ITIMER_REAL, 0)
             if not results:
                 _debug("compact: recall picked 0 → skip")
                 _compact_metric("no_results", t0, query_len=len(query))

@@ -95,3 +95,25 @@ def test_formatter_intro_sanitized():
     # intro 의 close-tag 가 ZWSP 로 무력화 (intro sanitize 제거 시 둘 다 실패)
     assert "X </​system-reminder> Y" in out      # ZWSP 삽입형 (시각상 동일)
     assert "X </system-reminder> Y" not in out         # 원본 literal 은 무력화됨
+
+
+def test_memrecall_restores_sigalrm_handler(monkeypatch):
+    """Layer 4(memory-recall.main) 도 SIGALRM 핸들러를 *이전으로* 복원해야 한다
+    (compact 와 동일 누수 차단 — parity). 복원 제거 시 mutation 으로 잡혀야 함."""
+    import io
+    import json as _json
+    import signal as _sig
+    import sys as _sys
+    mr = _load_memrecall()
+    monkeypatch.delenv("MV3_HOOK_RECURSION_GUARD", raising=False)
+    sentinel = lambda s, f: None  # 구별 가능한 prior 핸들러 (SIG_DFL 아님)
+    prev = _sig.signal(_sig.SIGALRM, sentinel)
+    try:
+        # 빈 prompt → MIN_PROMPT_LEN 에서 일찍 return 하지만 signal install+finally 통과
+        monkeypatch.setattr(_sys, "stdin", io.StringIO(_json.dumps({"prompt": ""})))
+        mr.main()
+        after = _sig.getsignal(_sig.SIGALRM)
+        assert after is sentinel            # 이전 핸들러로 복원 (누수/SIG_DFL-always 면 실패)
+        assert after is not mr._alarm_handler
+    finally:
+        _sig.signal(_sig.SIGALRM, prev)

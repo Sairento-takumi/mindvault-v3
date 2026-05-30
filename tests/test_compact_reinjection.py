@@ -403,24 +403,38 @@ def test_format_memory_context_scalar_source_not_char_split():
 
 # --- round-2 fix: intent 는 join-blob 이 아니라 최신 genuine 턴만 classify --------
 
-def test_compact_intent_classifies_latest_turn_only(tmp_path, monkeypatch):
-    """oldest 턴의 인사말/meta 어구가 join-blob 을 오분류해 잘못 스킵하면 안 됨.
-    classify 가 받는 텍스트가 *최신 턴* 이고 oldest 턴을 포함하지 않음을 직접 검증."""
+def test_compact_intent_skips_only_when_all_turns_chat(tmp_path, monkeypatch):
+    """최근 genuine 턴이 *전부* chat/meta 일 때만 스킵. 일부라도 substantive 면 회수 진행.
+    (latest-only 규칙이면 final ack 가 substantive 맥락을 억제 → 이 테스트가 실패.
+     any 규칙이면 oldest 인사말이 전체 억제 → 케이스 A 가 실패.)"""
     import session_memory as sm
     import memory_search
     import query_intent
-    t = tmp_path / "s.jsonl"
+    monkeypatch.setattr(query_intent, "classify", lambda txt: txt)  # passthrough
+    monkeypatch.setattr(query_intent, "should_skip_recall", lambda txt: "CHATMARK" in txt)
+    ran = {}
+    monkeypatch.setattr(memory_search, "recall_memory",
+                        lambda *a, **k: (ran.update(hit=True), [])[1])
+
+    # (A) 일부 substantive (oldest substantive, latest 는 chat-ack) → 회수 진행
+    t = tmp_path / "mixed.jsonl"
     _write_raw(t, [
-        {"type": "user", "message": {"content": "안녕 인사말 오래된턴"}},          # oldest
-        {"type": "user", "message": {"content": "최신진짜의도LATEST 분석 요청"}},   # latest
+        {"type": "user", "message": {"content": "substantive 실제 분석 요청 텍스트입니다"}},
+        {"type": "user", "message": {"content": "CHATMARK ok 고마워"}},
     ])
-    seen = {}
-    monkeypatch.setattr(query_intent, "classify", lambda txt: (seen.update(arg=txt), object())[1])
-    monkeypatch.setattr(query_intent, "should_skip_recall", lambda obj: False)
-    monkeypatch.setattr(memory_search, "recall_memory", lambda *a, **k: [])
+    ran.clear()
     sm.handle_compact_reinjection({"transcript_path": str(t)})
-    assert "최신진짜의도LATEST" in seen.get("arg", "")
-    assert "안녕 인사말" not in seen.get("arg", "")  # join-blob 이면 둘 다 포함 → 실패
+    assert ran.get("hit") is True  # 일부 substantive → 회수 (latest-only/any 규칙이면 skip → 실패)
+
+    # (B) 전부 chat → skip
+    t2 = tmp_path / "allchat.jsonl"
+    _write_raw(t2, [
+        {"type": "user", "message": {"content": "CHATMARK 안녕 충분히 긴 인사말"}},
+        {"type": "user", "message": {"content": "CHATMARK ok 고마워 잘했어"}},
+    ])
+    ran.clear()
+    sm.handle_compact_reinjection({"transcript_path": str(t2)})
+    assert ran.get("hit") is None  # 전부 chat → skip (recall 미호출)
 
 
 # --- round-4 fix: SIGALRM 핸들러 누수 방지 (장수 인터프리터 flaky 차단) ----------
@@ -435,11 +449,33 @@ def test_compact_reinjection_restores_sigalrm_handler(tmp_path, monkeypatch):
     _write_raw(t, [{"type": "user", "message": {"content": "충분히 긴 회수 질의 텍스트 압축 분석"}}])
     monkeypatch.setattr(memory_search, "recall_memory",
                         lambda *a, **k: [{"name": "x", "source": ["vec"], "description": "d", "snippet": "", "score": 0.9}])
-    before = _sig.getsignal(_sig.SIGALRM)
+    # SIG_DFL 이 아닌 *구별 가능한* sentinel 을 prior 핸들러로 설치 → "항상 SIG_DFL 로
+    # 복원" mutant 도 잡는다 (restore-to-PRIOR 를 검증).
+    sentinel = lambda s, f: None
+    prev = _sig.signal(_sig.SIGALRM, sentinel)
+    try:
+        sm.handle_compact_reinjection({"transcript_path": str(t)})
+        after = _sig.getsignal(_sig.SIGALRM)
+        assert after is sentinel              # 이전 핸들러로 복원 (누수/SIG_DFL-always 면 실패)
+        assert after is not sm._compact_alarm
+    finally:
+        _sig.signal(_sig.SIGALRM, prev)
+
+
+def test_compact_metric_outcomes_for_skips(tmp_path, monkeypatch):
+    """skip 경로 outcome 도 metrics 에 기록 (injected 외 종결점 가드)."""
+    import json as _json
+    import session_memory as sm
+    mlog = tmp_path / "metrics.jsonl"
+    monkeypatch.setattr(sm, "_METRICS_LOG", mlog)
+    sm.handle_compact_reinjection({})  # transcript 미해결 → no_transcript
+    t = tmp_path / "short.jsonl"
+    _write_raw(t, [{"type": "user", "message": {"content": "hi"}}])  # len 2 < 8 → short_query
     sm.handle_compact_reinjection({"transcript_path": str(t)})
-    after = _sig.getsignal(_sig.SIGALRM)
-    assert after == before  # 복원됨 (누수 시 after == _compact_alarm != before)
-    assert after is not sm._compact_alarm
+    recs = [_json.loads(l) for l in mlog.read_text().splitlines() if l.strip()]
+    outcomes = {r.get("outcome") for r in recs if r.get("kind") == "compact_reinject"}
+    assert "no_transcript" in outcomes
+    assert "short_query" in outcomes
 
 
 def test_compact_reinjection_records_metric(tmp_path, monkeypatch):
