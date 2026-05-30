@@ -26,6 +26,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent))
 from indexer import open_db  # noqa: E402
 from memory_indexer import embed_text as _embed_text_base  # noqa: E402
+from memory_indexer import parse_frontmatter  # noqa: E402
 
 
 def embed_text(query: str) -> list[float] | None:
@@ -513,7 +514,7 @@ def recall_memory(
 
     raw_cosine_min: vec top-1의 raw cosine이 이 값 미만이면 결과 0건.
                     V1 토큰 낭비 회피 (BGE-M3는 잡담에도 0.6-0.75 매칭 → 0.78+ 만 통과).
-    반환: [{"path","name","description","snippet","score","raw_cosine","source"}, ...]
+    반환: [{"path","name","description","snippet","score","raw_cosine","source","provenance"}, ...]
     """
     if db_path is None:
         db_path = DB_PATH
@@ -672,6 +673,17 @@ def recall_memory(
             f"top1_raw={top1_raw:.3f} picked={len(results)} "
             f"rrf_top={rrf_top} elapsed_ms={elapsed}"
         )
+
+        for r in results:
+            prov = {"source_type": "unknown", "source_ref": None, "captured_at": None}
+            try:
+                fm, _ = parse_frontmatter(Path(r["path"]).read_text(encoding="utf-8"))
+                prov["source_type"] = fm.get("source_type") or "unknown"
+                prov["source_ref"] = fm.get("source_ref") or None
+                prov["captured_at"] = fm.get("staged_at") or fm.get("captured_at")
+            except (OSError, KeyError):
+                pass
+            r["provenance"] = prov
         return results
     except Exception as e:
         # 의도적으로 `Exception` 만 잡는다 — hook 의 `_Timeout(BaseException)`
