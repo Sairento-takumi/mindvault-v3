@@ -410,6 +410,71 @@ def test_backfill_reports_skipped_names(tmp_path, capsys):
 # ─── Task 5: end-to-end 통합 (write→index→recall→format 출처 라벨) ─────────────
 
 
+def test_recall_source_ref_normalized_to_str(tmp_path):
+    """Fix A: source_ref が非文字列 (YAML で int/date に parse される値) でも
+    provenance["source_ref"] が str-or-None に正規化され、json.dumps が
+    default=str なしで通ること。"""
+    import json
+    from memory_indexer import incremental_index
+    from memory_search import recall_memory
+
+    memdir = tmp_path / "memory"
+    memdir.mkdir()
+
+    # source_ref: 12345  → YAML は int として parse する
+    int_file = memdir / "int_source_ref.md"
+    int_file.write_text(
+        "---\n"
+        "name: int-source-ref\n"
+        "description: source_ref が int になるケース\n"
+        "type: project\n"
+        "staged_at: 2026-05-30T10:00:00\n"
+        "source_type: session\n"
+        "source_ref: 12345\n"
+        "---\n\n"
+        "source_ref int 정규화 테스트 본문\n",
+        encoding="utf-8",
+    )
+
+    # source_ref: 2026-05-30  → YAML は date として parse する
+    date_file = memdir / "date_source_ref.md"
+    date_file.write_text(
+        "---\n"
+        "name: date-source-ref\n"
+        "description: source_ref が date になるケース\n"
+        "type: project\n"
+        "staged_at: 2026-05-30T10:00:00\n"
+        "source_type: session\n"
+        "source_ref: 2026-05-30\n"
+        "---\n\n"
+        "source_ref date 정규화 테스트 본문\n",
+        encoding="utf-8",
+    )
+
+    tmp_db = tmp_path / "source_ref_test.db"
+
+    with patch("memory_indexer.embed_text", side_effect=_fake_embed):
+        incremental_index([memdir], db_path=tmp_db)
+
+    with patch("memory_search.embed_text", return_value=None):
+        results = recall_memory(
+            "source_ref 정규화",
+            top_k=5,
+            score_threshold=0.0,
+            db_path=tmp_db,
+        )
+
+    assert results, "후보 없음 — fixture 확인"
+    for r in results:
+        prov = r.get("provenance", {})
+        sr = prov.get("source_ref")
+        assert sr is None or isinstance(sr, str), (
+            f"source_ref must be str-or-None, got {type(sr).__name__!r}: {sr!r}"
+        )
+    # json.dumps WITHOUT default=str must not raise
+    json.dumps(results, ensure_ascii=False)
+
+
 def test_e2e_staged_to_recall_label(tmp_path):
     """write_staged → index → recall_memory(provenance 부착) → _format_output(출처 라벨)
     전 구간이 연결되는지 검증하는 end-to-end 통합 테스트."""

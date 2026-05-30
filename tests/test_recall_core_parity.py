@@ -35,10 +35,19 @@ def test_gate_constants_parity():
 
 def test_formatter_byte_equivalence():
     """기본 intro + wrap=True 면 Layer 4 _format_output 과 byte-동일해야 한다.
-    name 안 ']' / snippet 안 '</system-reminder>' 같은 sanitize edge case 포함."""
+    name 안 ']' / snippet 안 '</system-reminder>' 같은 sanitize edge case 포함.
+
+    Fix B: provenance shape 보강 —
+      - captured_at が datetime.datetime オブジェクト (both do str(...)[:10])
+      - source_type: "unknown" → no 출처 line in BOTH (suppression parity)
+      - source_ref: None および 8文字超え (truncation parity)
+      - provenance キーなし (must render no label in both)
+    """
+    import datetime
     import recall_core
     mr = _load_memrecall()
     sample = [
+        # Original: session + string captured_at
         {
             "name": "foo]bar",
             "source": ["vec", "fts"],
@@ -47,6 +56,7 @@ def test_formatter_byte_equivalence():
             "score": 0.73,
             "provenance": {"source_type": "session", "source_ref": "abcd1234ef", "captured_at": "2026-05-30T10:00:00"},
         },
+        # Original: no provenance key at all
         {
             "name": "baz",
             "source": ["alias"],
@@ -54,8 +64,70 @@ def test_formatter_byte_equivalence():
             "snippet": "",
             "score": 0.5,
         },
+        # Shape 1: captured_at as datetime.datetime object (both do str(...)[:10])
+        {
+            "name": "dt-prov",
+            "source": ["vec"],
+            "description": "datetime captured_at",
+            "snippet": "",
+            "score": 0.6,
+            "provenance": {
+                "source_type": "session",
+                "source_ref": "abcd9999",
+                "captured_at": datetime.datetime(2026, 5, 30, 12, 0, 0),
+            },
+        },
+        # Shape 2: source_type "unknown" → must suppress 출처 line in BOTH
+        {
+            "name": "unknown-prov",
+            "source": ["fts"],
+            "description": "unknown source_type",
+            "snippet": "some snippet text",
+            "score": 0.55,
+            "provenance": {
+                "source_type": "unknown",
+                "source_ref": None,
+                "captured_at": None,
+            },
+        },
+        # Shape 3a: source_ref None
+        {
+            "name": "null-ref",
+            "source": ["vec"],
+            "description": "null source_ref",
+            "snippet": "",
+            "score": 0.52,
+            "provenance": {
+                "source_type": "url",
+                "source_ref": None,
+                "captured_at": "2026-05-29",
+            },
+        },
+        # Shape 3b: source_ref longer than 8 chars (truncation parity)
+        {
+            "name": "long-ref",
+            "source": ["vec"],
+            "description": "long source_ref truncated",
+            "snippet": "",
+            "score": 0.51,
+            "provenance": {
+                "source_type": "session",
+                "source_ref": "abcdef0123456789-longref",
+                "captured_at": "2026-05-28",
+            },
+        },
     ]
-    assert recall_core.format_memory_context(sample, wrap_system_reminder=True) == mr._format_output(sample)
+    out_core = recall_core.format_memory_context(sample, wrap_system_reminder=True)
+    out_mr = mr._format_output(sample)
+
+    # Byte-identical assertion (primary guard)
+    assert out_core == out_mr
+
+    # Suppression parity: "unknown" source_type must produce no 출처 line for that item
+    # Verify by checking that "unknown-prov" item has no 출처: line following it
+    # (we check the combined output has no standalone "출처: unknown" line)
+    assert "출처: unknown" not in out_core
+    assert "출처: unknown" not in out_mr
 
 
 def test_sanitize_parity():
