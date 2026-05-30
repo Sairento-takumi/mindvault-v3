@@ -68,3 +68,17 @@ def test_formatter_empty_returns_blank():
     import recall_core
     # 빈 results 에 헤더만 박혀 false self-report 유도하는 시나리오 차단
     assert recall_core.format_memory_context([]) == ""
+
+
+def test_formatter_scalar_source_parity():
+    """round-2 fix: 스칼라 source('vec')가 와도 recall_core 와 Layer 4 _format_output
+    이 둘 다 글자분해('v+e+c') 안 하고 byte-동일 (isinstance 가드 parity).
+    Layer 4 가드가 빠지면 out_mr 에 'v+e+c' 가 생겨 실패."""
+    import recall_core
+    mr = _load_memrecall()
+    sample = [{"name": "m", "source": "vec", "description": "d", "snippet": "", "score": 0.6}]
+    out_core = recall_core.format_memory_context(sample, wrap_system_reminder=True)
+    out_mr = mr._format_output(sample)
+    assert "v+e+c" not in out_core
+    assert "v+e+c" not in out_mr
+    assert out_core == out_mr

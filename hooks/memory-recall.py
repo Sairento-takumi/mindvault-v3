@@ -322,7 +322,12 @@ def _format_output(results: list[dict]) -> str:
         # Round 1 fix L1: source label 도 _sanitize — sanitization contract
         # 일관성. 현재는 internal label (vec/fts/alias) 만이라 exploitability
         # 낮지만 contract 누락은 닫는다.
-        srcs = _sanitize("+".join(r.get("source") or []))
+        # source 는 항상 list 지만 스칼라 'vec' 가 오면 "+".join 이 'v+e+c' 로 분해된다.
+        # isinstance 가드 — recall_core.format_memory_context 와 parity (or [] 만으론
+        # truthy 비-list 못 막음).
+        _src_val = r.get("source")
+        _src_list = _src_val if isinstance(_src_val, list) else ([] if not _src_val else [str(_src_val)])
+        srcs = _sanitize("+".join(_src_list))
         # Round 1 fix L3: name 안 ']' 가 들어가면 RECALLED_NAME_RE 가 첫 ']'
         # 에서 끊겨 추출 실패. 안전한 escape 로 차단.
         raw_name = r.get("name") or "(unnamed)"
