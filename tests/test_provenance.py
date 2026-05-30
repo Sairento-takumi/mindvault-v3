@@ -292,6 +292,121 @@ def test_backfill_skips_unreadable_file(tmp_path):
     assert n == 0
 
 
+# ─── Task 4b: backfill CLI — originSessionId + _procedural + fence + reporting ─
+
+def test_backfill_recovers_toplevel_originSessionId(tmp_path):
+    """Problem A fix: top-level originSessionId → source_type: session + source_ref."""
+    from src import provenance_backfill_cli as bf
+    mem = tmp_path / "memory"; mem.mkdir()
+    p = mem / "origin_toplevel.md"
+    uuid = "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+    p.write_text(f"---\nname: x\ntype: project\noriginSessionId: {uuid}\n---\n\nbody\n")
+    n = bf.backfill_dir(mem, dry_run=False)
+    assert n == 1
+    text = p.read_text()
+    assert "source_type: session" in text
+    assert f"source_ref: {uuid}" in text
+
+
+def test_backfill_recovers_nested_originSessionId(tmp_path):
+    """Problem A fix: metadata.originSessionId (nested) → source_type: session + source_ref."""
+    from src import provenance_backfill_cli as bf
+    mem = tmp_path / "memory"; mem.mkdir()
+    p = mem / "origin_nested.md"
+    uuid = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+    p.write_text(
+        f"---\nname: y\ntype: project\nmetadata:\n  originSessionId: {uuid}\n---\n\nbody\n"
+    )
+    n = bf.backfill_dir(mem, dry_run=False)
+    assert n == 1
+    text = p.read_text()
+    assert "source_type: session" in text
+    assert f"source_ref: {uuid}" in text
+
+
+def test_backfill_staged_from_session_still_works(tmp_path):
+    """Problem A: existing staged_from_session behavior preserved (priority 1)."""
+    from src import provenance_backfill_cli as bf
+    mem = tmp_path / "memory"; mem.mkdir()
+    p = mem / "staged_still.md"
+    p.write_text("---\nname: z\ntype: feedback\nstaged_from_session: old1234\n---\n\nbody\n")
+    n = bf.backfill_dir(mem, dry_run=False)
+    assert n == 1
+    text = p.read_text()
+    assert "source_type: session" in text
+    assert "source_ref: old1234" in text
+
+
+def test_backfill_trailing_whitespace_fence_no_crash(tmp_path):
+    """Problem B fix: closing fence '--- ' (trailing space) must not raise; clean file still counted."""
+    from src import provenance_backfill_cli as bf
+    mem = tmp_path / "memory"; mem.mkdir()
+
+    # Bad file: closing fence has trailing space → parse_frontmatter may parse it,
+    # but exact '---' won't be found by old lines.index("---", 1).
+    bad = mem / "bad_fence.md"
+    bad.write_text("---\nname: bad\ntype: project\n---  \n\nbody\n")
+
+    # Clean file: normal closing fence → should be processed normally
+    clean = mem / "clean_fence.md"
+    clean.write_text("---\nname: clean\ntype: project\n---\n\nbody\n")
+
+    # Must NOT raise; clean file counted; bad file silently skipped (not crashed)
+    n = bf.backfill_dir(mem, dry_run=False)
+    assert n >= 1, f"clean file should be counted, got n={n}"
+    # clean file must have been processed
+    assert "source_type: unknown" in clean.read_text()
+
+
+def test_backfill_includes_procedural(tmp_path):
+    """Problem C fix: _procedural/*.md included; _staged/*.md excluded."""
+    from src import provenance_backfill_cli as bf
+    mem = tmp_path / "memory"; mem.mkdir()
+
+    root_file = mem / "root_mem.md"
+    root_file.write_text("---\nname: root\ntype: project\n---\n\nbody\n")
+
+    proc_dir = mem / "_procedural"; proc_dir.mkdir()
+    proc_file = proc_dir / "proc_mem.md"
+    proc_file.write_text("---\nname: proc\ntype: howto\n---\n\nbody\n")
+
+    staged_dir = mem / "_staged"; staged_dir.mkdir()
+    staged_file = staged_dir / "staged_mem.md"
+    staged_file.write_text("---\nname: staged\ntype: project\n---\n\nbody\n")
+
+    n = bf.backfill_dir(mem, dry_run=False)
+    # Both root + procedural should be counted (= 2); staged untouched
+    assert n == 2, f"expected 2, got {n}"
+    assert "source_type" in root_file.read_text()
+    assert "source_type" in proc_file.read_text()
+    assert "source_type" not in staged_file.read_text()
+
+
+def test_backfill_reports_skipped_names(tmp_path, capsys):
+    """Problem D fix: main() prints skipped file names (bad frontmatter)."""
+    import sys
+    from src import provenance_backfill_cli as bf
+    mem = tmp_path / "memory"; mem.mkdir()
+
+    # Unreadable file → skipped
+    bad = mem / "unreadable.md"
+    bad.write_bytes(b"\xff\xfe invalid utf-8 \x80\x81")
+
+    # Normal file → processed
+    good = mem / "good.md"
+    good.write_text("---\nname: g\ntype: project\n---\n\nbody\n")
+
+    # Patch sys.argv and call main()
+    with patch.object(sys, "argv", ["bf", str(mem), "--apply"]):
+        bf.main()
+
+    captured = capsys.readouterr().out
+    # Must mention skipped file name
+    assert "unreadable.md" in captured
+    # Must show count summary
+    assert "1" in captured  # at least the 1 applied file
+
+
 # ─── Task 5: end-to-end 통합 (write→index→recall→format 출처 라벨) ─────────────
 
 
