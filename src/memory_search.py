@@ -67,13 +67,16 @@ def _is_deprecated(path: Path) -> bool:
     """
     try:
         with path.open("r", encoding="utf-8", errors="replace") as f:
-            head = f.read(2048)
+            head = f.read()  # audit R3: 옛 2KB cap 은 Phase1 ①/③ 의 frontmatter 주입
+            # (source_*, reverify_*)이 closing fence 를 2048자 밖으로 밀면 fence 미검출
+            # → deprecated 감쇠 silent 누락 → superseded 메모리 재부상(over-trust).
+            # 메모리 파일은 작아 full read 비용 무시 가능.
     except OSError:
         return False
-    # frontmatter 블록 추출: ---\n...\n---
+    # frontmatter 블록 추출: (BOM 허용)---\n...\n---
     # CRLF (Windows/Obsidian 수동 편집) 도 허용 — \r?\n. 미허용 시 frontmatter
     # 미검출 → _is_deprecated False → decay skip (silent).
-    m = re.match(r"^---\r?\n(.*?)\r?\n---\r?\n", head, re.DOTALL)
+    m = re.match(r"^﻿?---\r?\n(.*?)\r?\n---\r?\n", head, re.DOTALL)
     if not m:
         return False
     fm = m.group(1)

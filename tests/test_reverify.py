@@ -494,3 +494,26 @@ def test_atomic_write_pid_unique_tmp(tmp_path, monkeypatch):
     assert reverify._atomic_write(p, "data") is True
     assert f".{_os.getpid()}.tmp" in captured["src"]   # PID-scoped tmp
     assert p.read_text() == "data"
+
+
+# ---- sweep round-3 fixes ----
+def test_maybe_scan_due_future_timestamp_self_heals(tmp_path, monkeypatch):
+    """audit R3: 미래 last_scan_epoch(클록 역행/NTP 후진)이면 영구 SKIP 하지 않고
+    scan 으로 떨어져 sidecar 를 정상 시각으로 self-heal."""
+    import json
+    import time
+    import reverify
+    monkeypatch.setenv("MV3_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("MV3_REVERIFY_ROOT", str(_fake_root_for_scan(tmp_path)))
+    mem = tmp_path / "mem"
+    mem.mkdir()
+    (mem / "s.md").write_text("---\nname: s\n---\n\nBGE-M3\n", encoding="utf-8")
+    sc = reverify._sidecar_path()
+    sc.parent.mkdir(parents=True, exist_ok=True)
+    sc.write_text(json.dumps({"last_scan_epoch": time.time() + 365 * 86400}), encoding="utf-8")
+    stats = reverify.maybe_scan_due(mem, interval_days=7)
+    assert stats is not None        # 미래 timestamp → 영구 SKIP 아님 → scan
+    assert stats["flagged"] == 1
+    # sidecar 가 정상(과거) 시각으로 self-heal 됐는지
+    healed = reverify._read_sidecar_last_scan()
+    assert healed is not None and healed <= time.time() + 1

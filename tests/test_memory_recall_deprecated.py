@@ -206,3 +206,28 @@ def test_apply_decay_also_decays_raw_cosine_via_recall_pipeline(tmp_path, monkey
         f"After T8 decay, fresh memory should outrank deprecated. "
         f"Got top={top_path}. All results: {[r['path'] for r in results]}"
     )
+
+
+def test_is_deprecated_finds_fence_past_2048_chars(tmp_path):
+    """audit R3: frontmatter 가 2048자를 넘어도(Phase1 ①/③ 주입 후) closing fence 를
+    검출해 deprecated 감쇠가 유지된다(옛 2KB cap 은 fence 못 찾아 감쇠 silent 누락)."""
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+    from memory_search import _is_deprecated
+    p = tmp_path / "dep.md"
+    pad = "x" * 2100  # description 을 길게 — closing fence + deprecated_by 가 2048자 밖
+    p.write_text(
+        f"---\nname: m\ndescription: {pad}\ndeprecated_by: [newer-memory]\n---\n\nbody\n",
+        encoding="utf-8",
+    )
+    assert _is_deprecated(p) is True   # 2KB 밖 fence/deprecated_by 도 검출
+
+
+def test_is_deprecated_bom_tolerant(tmp_path):
+    """audit R3: 선행 BOM 메모리도 deprecated 검출(parser 정렬)."""
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+    from memory_search import _is_deprecated
+    p = tmp_path / "dep_bom.md"
+    p.write_text("﻿---\nname: m\ndeprecated_by: [newer]\n---\n\nbody\n", encoding="utf-8")
+    assert _is_deprecated(p) is True

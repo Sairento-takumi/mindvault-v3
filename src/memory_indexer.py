@@ -109,7 +109,10 @@ def _extra_memory_dirs() -> list[Path]:
             out.append(p)
     return out
 
-FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n?", re.DOTALL)
+# 선행 BOM(﻿) 허용 (audit R3): BOM 메모리에서 reverify._FM_RE 는 stale 을 읽는데
+# 이 canonical parser 가 비관용이면 recall 의 '재검증 필요' 경고·provenance 가 통째
+# 누락돼 list↔recall trust state 가 어긋난다. ﻿? 로 정렬.
+FRONTMATTER_RE = re.compile(r"^﻿?---\s*\n(.*?)\n---\s*\n?", re.DOTALL)
 
 # 같은 디렉토리의 indexer.py(Sprint 1~3)에서 secret 마스킹 + open_db 재사용
 sys.path.insert(0, str(Path(__file__).parent))

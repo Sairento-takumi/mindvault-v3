@@ -370,6 +370,10 @@ def maybe_scan_due(mem_dir: Path, interval_days: int = REVERIFY_INTERVAL_DAYS) -
     SessionEnd best-effort 트리거용 — 사실상 주 1회.
     """
     last = _read_sidecar_last_scan()
-    if last is not None and (time.time() - last) < interval_days * 86400:
+    # 0 <= delta: 미래 timestamp(클록 역행/NTP 후진 보정)면 delta<0 → 통과(scan)해서
+    # sidecar 를 정상 time.time() 으로 self-heal. 가드 없으면 미래 last_scan 이
+    # 영구 SKIP 을 유발해 reverify 가 wall-clock 따라잡을 때까지 silent 사망(audit R3).
+    now = time.time()
+    if last is not None and 0 <= (now - last) < interval_days * 86400:
         return None
     return scan_memories(mem_dir)

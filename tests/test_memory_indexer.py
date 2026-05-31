@@ -34,6 +34,16 @@ body content here"""
         self.assertEqual(fm, {})
         self.assertEqual(body.strip(), md.strip())
 
+    def test_bom_prefixed_frontmatter(self):
+        """audit R3: 선행 UTF-8 BOM 메모리도 frontmatter 파싱(BOM 비관용이면 recall/index
+        가 frontmatter 통째 누락 — reverify list↔recall trust state 어긋남)."""
+        from memory_indexer import parse_frontmatter
+        md = "﻿---\nname: m\nreverify_status: stale\n---\n\nbody\n"
+        fm, body = parse_frontmatter(md)
+        self.assertEqual(fm.get("name"), "m")
+        self.assertEqual(fm.get("reverify_status"), "stale")
+        self.assertIn("body", body)
+
     def test_description_missing(self):
         from memory_indexer import parse_frontmatter
         md = """---
