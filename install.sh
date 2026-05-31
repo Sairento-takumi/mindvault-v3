@@ -681,6 +681,8 @@ fi
 #  - NEXT-31~33: alias_generator (alias_index 자산 생성)
 #  - v3.4 Layer 5 (T10): contradiction_detector (session-memory-end import),
 #                        contradiction_review_cli (사용자 review CLI)
+#  - Phase 1③ 신뢰성 (v3.x): reverify (session-memory-end 의 maybe_scan_due import),
+#                            reverify_cli (수동 scan/list/verify-registry CLI)
 RUNTIME_EXTRA_SRC=(
   "$REPO_DIR/src/query_intent.py"
   "$REPO_DIR/src/recall_core.py"
@@ -694,6 +696,8 @@ RUNTIME_EXTRA_SRC=(
   "$REPO_DIR/src/alias_generator.py"
   "$REPO_DIR/src/contradiction_detector.py"
   "$REPO_DIR/src/contradiction_review_cli.py"
+  "$REPO_DIR/src/reverify.py"
+  "$REPO_DIR/src/reverify_cli.py"
 )
 for f in "${RUNTIME_EXTRA_SRC[@]}"; do
   if [ -f "$f" ]; then

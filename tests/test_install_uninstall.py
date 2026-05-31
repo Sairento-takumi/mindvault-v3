@@ -638,5 +638,33 @@ class TestCompactReinjectionDeploy(unittest.TestCase):
         self.assertTrue((self.repo / "src" / "recall_core.py").exists())
 
 
+class TestReverifyDeploy(unittest.TestCase):
+    """Phase 1③ 신뢰성 회귀 가드 — install.sh 가 reverify 모듈을 deploy 하는지.
+
+    session_memory_end.py 가 `from reverify import maybe_scan_due` 를 runtime import.
+    install.sh RUNTIME_EXTRA_SRC 에서 빠지면 hook 이 silent ModuleNotFoundError
+    (broad except 안에서 묻힘) → ③ stale 자동 감지 전체 무동작 + reverify_cli 부재.
+    (TestV34ContradictionDeploy 와 동일 failure class — audit sweep R1 발견.)
+    """
+
+    def setUp(self):
+        self.repo = Path(__file__).resolve().parent.parent
+
+    def test_install_sh_deploys_reverify_modules(self):
+        content = (self.repo / "install.sh").read_text(encoding="utf-8")
+        for mod in ("reverify.py", "reverify_cli.py"):
+            ok = (
+                mod in content
+                or "src/*.py" in content
+                or "cp -r src" in content
+                or "cp src/" in content
+            )
+            self.assertTrue(ok, f"install.sh must deploy {mod} (③ 신뢰성 런타임 import)")
+
+    def test_reverify_source_files_exist(self):
+        self.assertTrue((self.repo / "src" / "reverify.py").exists())
+        self.assertTrue((self.repo / "src" / "reverify_cli.py").exists())
+
+
 if __name__ == "__main__":
     unittest.main()
