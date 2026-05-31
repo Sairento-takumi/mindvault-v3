@@ -180,10 +180,12 @@ def test_self_check_clause_present_and_parity():
                "snippet": "", "score": 0.6}]
     out_core = recall_core.format_memory_context(sample, wrap_system_reminder=True)
     out_mr = mr._format_output(sample)
-    # self-check 조항 핵심 토큰 (D3(설계 결정3) 확정 문구)
+    # self-check 조항 핵심 토큰 (D3(설계 결정3) 확정 문구 — audit R2E-1 후 content+이름 기반)
     assert "옵션·권장·다음 단계" in out_core
     assert "위반 가능성" in out_core
-    assert "feedback·project" in out_core
+    # content 기반 scoping(회수 출력에 가시) + 구체 placeholder <이름> (R2E-1: 비가시 type 의존 제거)
+    assert "위 회수 메모리에 명시된 룰·제약" in out_core
+    assert "회수 메모리 <이름> 위반 가능성" in out_core
     # 기존 NEXT-37 계약 불변 (회귀 흉터 보호)
     assert "회수 노트:" in out_core
     assert "모순되면 즉시 표기" in out_core
@@ -208,7 +210,7 @@ def test_new_contract_preserves_self_eval_ingestion():
     out = recall_core.format_memory_context(sample, wrap_system_reminder=True)
     ids = extract_recalled_ids_from_hook_injection(out)
     assert ids == ["feedback-recalled-memory-weight"]   # 정확히 1건
-    # 새 계약 문구 안 'X' / 'feedback·project' 등이 추출 noise 안 됨
+    # 새 계약 footer('회수 메모리 <이름> 위반 가능성' 등)가 RECALLED_NAME_RE 추출 noise 안 됨
     assert len(ids) == 1
 
 
@@ -225,6 +227,27 @@ def test_new_contract_sanitize_intact():
     zwsp = recall_core._ZWSP
     assert f"leak </{zwsp}system-reminder> here" in out
     assert out.count("</system-reminder>") == 1   # wrapper 만 (snippet 누출 X)
+
+
+def test_self_check_clause_propagates_to_compact_intro():
+    """D7(설계 규칙7) — compact 재주입(session_memory)은 format_memory_context
+    경유라 CONTRACT(self-check 조항 포함)가 자동 전파된다. 실제 COMPACT_INTRO 로
+    렌더해 조항이 들어가는지 고정 (audit R2-D-1: 설계 주장의 직접 테스트 갭 차단).
+
+    조항은 intro 와 무관하게 CONTRACT footer 에 붙으므로, Layer-4 hook(DEFAULT_INTRO)
+    과 compact(COMPACT_INTRO) 양 경로 모두 동일 self-check 계약을 싣는다."""
+    import recall_core
+    import session_memory
+    sample = [{"name": "m", "source": ["vec"], "description": "d",
+               "snippet": "", "score": 0.6}]
+    out = recall_core.format_memory_context(
+        sample, intro=session_memory.COMPACT_INTRO, wrap_system_reminder=True
+    )
+    # self-check 조항이 compact 경로에도 전파 (D7 주장 검증)
+    assert "옵션·권장·다음 단계" in out
+    assert "회수 메모리 <이름> 위반 가능성" in out
+    # default 가 아니라 실제 compact intro 가 쓰였음을 보증 (구별 토큰)
+    assert "압축 직후 재주입" in out
 
 
 def test_memrecall_restores_sigalrm_handler(monkeypatch):
