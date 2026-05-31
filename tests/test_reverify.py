@@ -215,3 +215,45 @@ def test_maybe_scan_due_first_run_then_skips(tmp_path, monkeypatch):
     assert s1 is not None and s1["flagged"] == 1   # 첫 실행 → scan
     s2 = maybe_scan_due(mem, interval_days=7)
     assert s2 is None                               # sidecar 최신 → skip
+
+
+def test_upsert_yaml_roundtrip_note_with_real_finding(tmp_path):
+    """scan 이 만든 note 가 yaml.safe_load 로 round-trip 돼야 한다 (recall_memory 가
+    parse_frontmatter→yaml.safe_load 로 reverify_status 를 읽으므로 깨지면 라벨 미렌더)."""
+    import yaml
+    from reverify import _FM_RE
+    root = _fake_root(tmp_path)
+    note = check_memory_staleness("BGE-M3 임베딩이 0.7+ 매칭", root).note
+    out = upsert_reverify_frontmatter("---\nname: m\n---\n\nbody\n", "stale", note, "2026-05-31")
+    m = _FM_RE.match(out)
+    d = yaml.safe_load(m.group(1))          # 깨지면 여기서 예외/None
+    assert d["reverify_status"] == "stale"
+    assert "bge-m3" in d["reverify_note"]
+
+
+def test_scanned_file_frontmatter_yaml_parseable(tmp_path, monkeypatch):
+    """scan 후 실제 파일이 yaml 파싱 가능 (recall_memory 경로 보장)."""
+    import yaml
+    from reverify import _FM_RE
+    root = _fake_root(tmp_path)
+    monkeypatch.setenv("MV3_DATA_DIR", str(tmp_path / "data"))
+    mem = tmp_path / "mem"
+    mem.mkdir()
+    p = mem / "s.md"
+    p.write_text("---\nname: s\ntype: feedback\n---\n\nBGE-M3 임베딩\n", encoding="utf-8")
+    scan_memories(mem, root=root, checked="2026-05-31")
+    m = _FM_RE.match(p.read_text(encoding="utf-8"))
+    d = yaml.safe_load(m.group(1))
+    assert d["reverify_status"] == "stale"
+    assert d["name"] == "s" and d["type"] == "feedback"   # 기존 키 보존 + 파싱 정상
+
+
+def test_collect_includes_procedural(tmp_path):
+    from reverify import _collect_memory_files
+    mem = tmp_path / "mem"
+    (mem / "_procedural").mkdir(parents=True)
+    (mem / "a.md").write_text("x", encoding="utf-8")
+    (mem / "_procedural" / "b.md").write_text("y", encoding="utf-8")
+    (mem / "MEMORY.md").write_text("idx", encoding="utf-8")
+    names = {p.name for p in _collect_memory_files(mem)}
+    assert names == {"a.md", "b.md"}   # MEMORY.md 제외, _procedural 포함

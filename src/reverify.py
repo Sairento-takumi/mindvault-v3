@@ -107,7 +107,7 @@ def check_memory_staleness(
         hit = next((a for a in fact.stale_aliases if _contains_token(text, a)), None)
         if hit:
             findings.append(
-                f"{fact.key}: '{hit}' 현재형 참조, 현행 {fact.current_value} 미언급"
+                f"{fact.key} 현재형 참조 {hit} (현행 {fact.current_value} 미언급)"
             )
     if findings:
         return StaleVerdict(status="stale", note="; ".join(findings), findings=findings)
@@ -129,7 +129,7 @@ def verify_registry(root: Optional[Path] = None, facts: tuple = CANONICAL_FACTS)
     ]
 
 
-_FM_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
+_FM_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n?", re.DOTALL)
 _REVERIFY_KEYS = ("reverify_status", "reverify_checked", "reverify_note")
 REVERIFY_INTERVAL_DAYS = 7
 
@@ -159,7 +159,7 @@ def upsert_reverify_frontmatter(text: str, status: str, note: str, checked: str)
     if not m:
         return "---\n" + "\n".join(new_lines) + "\n---\n\n" + text
     kept = [
-        ln for ln in m.group(1).split("\n")
+        ln.rstrip("\r") for ln in m.group(1).split("\n")
         if not any(ln.lstrip().startswith(k + ":") for k in _REVERIFY_KEYS)
     ]
     merged = "\n".join(kept + new_lines)
@@ -172,7 +172,7 @@ def _strip_reverify_frontmatter(text: str) -> str:
     if not m:
         return text
     kept = [
-        ln for ln in m.group(1).split("\n")
+        ln.rstrip("\r") for ln in m.group(1).split("\n")
         if not any(ln.lstrip().startswith(k + ":") for k in _REVERIFY_KEYS)
     ]
     return "---\n" + "\n".join(kept) + "\n---\n" + text[m.end():]
@@ -272,7 +272,7 @@ def scan_memories(
         elif verdict.status == "fresh" and had_flag and wrote:
             cleared += 1
     _write_sidecar()
-    return {"flagged": flagged, "cleared": cleared, "checked": processed, "total": len(files)}
+    return {"flagged": flagged, "cleared": cleared, "processed": processed, "total": len(files)}
 
 
 def _read_sidecar_last_scan() -> Optional[float]:
@@ -287,14 +287,14 @@ def _write_sidecar() -> None:
     sc = _sidecar_path()
     try:
         sc.parent.mkdir(parents=True, exist_ok=True)
-        sc.write_text(
-            json.dumps(
-                {"last_scan_epoch": time.time(), "last_scan": time.strftime("%Y-%m-%dT%H:%M:%S")}
-            ),
-            encoding="utf-8",
-        )
     except OSError:
-        pass
+        return
+    _atomic_write(
+        sc,
+        json.dumps(
+            {"last_scan_epoch": time.time(), "last_scan": time.strftime("%Y-%m-%dT%H:%M:%S")}
+        ),
+    )
 
 
 def maybe_scan_due(mem_dir: Path, interval_days: int = REVERIFY_INTERVAL_DAYS) -> Optional[dict]:
