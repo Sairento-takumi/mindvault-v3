@@ -592,3 +592,32 @@ def test_e2e_staged_to_recall_label(tmp_path):
     assert "출처:" in out, f"'출처:' 라벨이 출력에 없음:\n{out}"
     assert "session" in out, f"'session' source_type이 출력에 없음:\n{out}"
     assert "e2e11111" in out, f"source_ref 8자 prefix 'e2e11111'이 출력에 없음:\n{out}"
+
+
+def test_backfill_block_scalar_colon_ref_yaml_safe(tmp_path):
+    """audit sweep R1: originSessionId block-scalar 가 collapse 돼 ref 에 ': '(콜론+
+    공백)가 들어가도, 주입 후 frontmatter 가 yaml.safe_load 로 파싱돼야 한다(옛 코드는
+    unquoted source_ref 로 frontmatter 전체를 깨 provenance/이름 silent 소실)."""
+    from memory_indexer import parse_frontmatter
+    from provenance_backfill_cli import backfill_file
+    p = tmp_path / "m.md"
+    p.write_text(
+        "---\nname: m\noriginSessionId: |\n  imported batch\n  note: from pipeline\n---\n\nbody\n",
+        encoding="utf-8",
+    )
+    assert backfill_file(p, dry_run=False) is True
+    fm, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
+    assert fm, "주입 후 frontmatter 가 yaml 로 파싱 안 됨 (provenance/이름 소실)"
+    assert fm.get("name") == "m"                          # 기존 키 보존
+    assert fm.get("source_type") == "session"
+    assert "note: from pipeline" in str(fm.get("source_ref", ""))  # 값 보존(인용)
+
+
+def test_backfill_simple_refs_stay_unquoted(tmp_path):
+    """UUID·일반 URL 은 plain-safe 라 인용 안 함(raw-line 호환·기존 단언 불변)."""
+    from provenance_backfill_cli import backfill_file
+    for ref in ("abcd1234-5678-90ab-cdef-111122223333", "https://youtu.be/abc123"):
+        p = tmp_path / f"m_{ref[-6:]}.md"
+        p.write_text(f"---\nname: m\noriginSessionId: {ref}\n---\n\nbody\n", encoding="utf-8")
+        backfill_file(p, dry_run=False)
+        assert f"source_ref: {ref}" in p.read_text(encoding="utf-8")  # 인용 안 됨

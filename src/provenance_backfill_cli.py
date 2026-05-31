@@ -9,14 +9,34 @@ session id 우선순위:
 """
 from __future__ import annotations
 import argparse
+import json
 import os
 import re
 import sys
 from pathlib import Path
 from typing import List, Optional
 
+import yaml
+
 sys.path.insert(0, str(Path(__file__).parent))
 from memory_indexer import parse_frontmatter  # noqa: E402
+
+
+def _safe_scalar(value: str) -> str:
+    """frontmatter 라인 값으로 안전하면 그대로, 아니면 JSON 인용(유효 YAML scalar).
+
+    audit sweep R1: source_ref 는 외부(import 파이프라인) frontmatter 에서 온 임의
+    값이라 ': '(콜론+공백)·선행 YAML indicator 가 들어오면 unquoted 로 쓸 때
+    yaml.safe_load(recall/indexer 경로)가 **frontmatter 전체**를 버려 provenance·
+    reverify 가 silent 소실됐다. plain scalar 로 round-trip 되면(UUID·일반 URL)
+    그대로 두어 기존 raw-line 단언 호환, 위험할 때만 json.dumps 로 인용한다.
+    """
+    try:
+        if yaml.safe_load(f"k: {value}") == {"k": value}:
+            return value
+    except yaml.YAMLError:
+        pass
+    return json.dumps(value, ensure_ascii=False)
 
 
 def _has(fm: dict, key: str) -> bool:
@@ -72,9 +92,15 @@ def backfill_file(path: Path, dry_run: bool) -> bool:
 
     inject = [f"source_type: {st}"]
     if ref:
-        inject.append(f"source_ref: {ref}")
+        inject.append(f"source_ref: {_safe_scalar(ref)}")
     new = lines[:close] + inject + lines[close:]
     out = "\n".join(new)
+    # 안전 가드(audit sweep R1): 주입 결과가 yaml 로 다시 파싱돼야 한다. 외부 ref 의
+    # ': '/indicator 가 frontmatter 전체를 깨면(→ {}) provenance·reverify 가 silent
+    # 소실되므로, 파싱 불가가 되면 쓰지 않고 skip(원본 보존). _safe_scalar 가 정상
+    # 입력엔 no-op 이라 기존 동작 불변.
+    if not parse_frontmatter(out)[0]:
+        return False
     if dry_run:
         return True
     tmp = path.with_suffix(path.suffix + ".tmp")
