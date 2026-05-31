@@ -257,3 +257,50 @@ def test_collect_includes_procedural(tmp_path):
     (mem / "MEMORY.md").write_text("idx", encoding="utf-8")
     names = {p.name for p in _collect_memory_files(mem)}
     assert names == {"a.md", "b.md"}   # MEMORY.md 제외, _procedural 포함
+
+
+def test_e2e_bge_memory_scan_to_recall_label(tmp_path, monkeypatch):
+    """완료 게이트 e2e: BGE 주장 메모리 → scan flag → parse_frontmatter(yaml) 로 읽혀
+    → 회수 포맷터가 경고 라벨 렌더. (전체 chain: scan→yaml→formatter)"""
+    import recall_core
+    from memory_indexer import parse_frontmatter
+    root = _fake_root_for_scan(tmp_path)
+    mem = tmp_path / "mem"
+    mem.mkdir()
+    bge = mem / "feedback_no_v1_token_waste.md"
+    bge.write_text("---\nname: no-v1-token-waste\ntype: feedback\n---\n\nBGE-M3 임베딩이 0.7+ 매칭.\n", encoding="utf-8")
+    monkeypatch.setenv("MV3_DATA_DIR", str(tmp_path / "data"))
+    scan_memories(mem, root=root, checked="2026-05-31")
+
+    # (1) scan 이 yaml-safe 하게 flag 했는가 — parse_frontmatter(yaml.safe_load) 로 읽힘
+    fm, _ = parse_frontmatter(bge.read_text(encoding="utf-8"))
+    assert fm.get("reverify_status") == "stale"
+    assert fm.get("name") == "no-v1-token-waste"   # 기존 키 보존 + yaml 정상
+    assert "bge-m3" in (fm.get("reverify_note") or "")
+
+    # (2) recall_memory 가 부착하는 것과 동일 shape 로 포맷터에 넘기면 경고 라벨
+    sample = [{
+        "name": fm["name"], "source": ["vec"], "description": "d", "snippet": "",
+        "score": 0.7,
+        "reverify": {"status": fm["reverify_status"], "note": fm["reverify_note"]},
+    }]
+    out = recall_core.format_memory_context(sample, wrap_system_reminder=True)
+    assert "재검증 필요:" in out and "bge-m3" in out
+
+
+def test_maybe_scan_due_missing_dir_is_safe(tmp_path, monkeypatch):
+    """존재하지 않는 mem_dir 여도 maybe_scan_due 가 예외 없이 안전 (best-effort)."""
+    monkeypatch.setenv("MV3_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("MV3_REVERIFY_ROOT", str(_fake_root_for_scan(tmp_path)))
+    stats = maybe_scan_due(tmp_path / "does_not_exist", interval_days=7)
+    assert stats is not None
+    assert stats["flagged"] == 0 and stats["total"] == 0
+
+
+def test_session_end_wires_reverify_best_effort():
+    """SessionEnd main() 이 reverify 를 best-effort(try/except)로 호출하도록 배선됨."""
+    import inspect
+    import session_memory_end
+    src = inspect.getsource(session_memory_end.main)
+    assert "maybe_scan_due" in src           # reverify 트리거 배선
+    assert "reverify skipped" in src         # silent-fail _debug 마커

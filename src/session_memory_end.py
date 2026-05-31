@@ -376,6 +376,22 @@ def main() -> int:
             )
         except Exception as e:
             _debug(f"alias_sync skipped: {type(e).__name__}: {e}")
+
+        # Phase 1③ (reliability, 2026-05-31): stale 재검증 증분. sidecar last_scan
+        # 이 REVERIFY_INTERVAL_DAYS 보다 오래됐을 때만 결정론 grep scan (LLM 없음 —
+        # 운영비 0). best-effort silent-fail — recall hot-path 무관, 다음 SessionEnd
+        # 재시도 가능. flag-only-stale 이라 fresh 메모리 무손상.
+        try:
+            from reverify import maybe_scan_due
+            rstat = maybe_scan_due(MEMORY_DIR)
+            if rstat is not None:
+                _debug(
+                    f"reverify scan flagged={rstat.get('flagged', 0)} "
+                    f"cleared={rstat.get('cleared', 0)} "
+                    f"processed={rstat.get('processed', 0)}/{rstat.get('total', 0)}"
+                )
+        except Exception as e:
+            _debug(f"reverify skipped: {type(e).__name__}: {e}")
         return 0
     except Exception as e:
         _debug(f"FATAL {e}\n{traceback.format_exc()}")
