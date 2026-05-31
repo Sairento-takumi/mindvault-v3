@@ -34,26 +34,28 @@
 - **대안 (기각)**: `~/.claude/CLAUDE.md`의 "회수 알림 규칙" 섹션에 추가. always-on 이라 회수 없는 잡담 턴에도 토큰 소모, 회수 결과와 물리적으로 분리돼 "어느 메모리의 어느 룰" cross-reference 대상이 불명확. 또한 사용자 글로벌 파일 수정은 배포 성격(형 승인 경계).
 - **보조 옵션 (형 승인 후 선택)**: CLAUDE.md "회수 알림 규칙"에 self-check 요약 1줄을 추가하면 hook 출력 계약을 상시 강화. 이번 범위에서는 **하지 않음** — hook 출력 단일 locus 로 시작하고, dogfood 후 효과 부족 시 형 승인하에 보강. (최종 보고 플래그)
 
-### D2. 계약 강도 = **무조건 주입 + 문구로 type-scope** (조건부 렌더링 아님)
+### D2. 계약 강도 = **무조건 주입 + 문구로 content-scope** (조건부 렌더링 아님)
 
-회수 결과가 있으면 self-check 줄을 항상 렌더한다. 단 문구 자체가 "feedback·project 메모리의 명시 룰"로 scope 한다.
+회수 결과가 있으면 self-check 줄을 항상 렌더한다. 단 문구 자체가 "위 회수 메모리에 명시된 룰·제약"으로 scope 한다 — 즉 **회수 출력에 가시적인 룰·제약 내용**으로 범위를 좁힌다.
 
-- **근거**: TOP_K=1 이라 보통 1건 회수. 계약은 1문장(~80자)이라 토큰 영향 미미(§ "v1 토큰낭비 금지" 준수 범위). 문구가 스스로 scope 하므로 회수된 게 reference/user 타입이거나 명시 룰이 없으면 자연 no-op. 회수 결과 dict shape 는 `{path,name,description,snippet,score,raw_cosine,source,provenance}` 로 **`type` 필드가 없다** → 조건부 렌더링은 hot-path 결과에 type 부착 + 양 포맷터 분기 + parity 테스트 복잡화를 부르는데, 절감 이득(1줄 토큰)이 그 위험보다 작다.
+- **근거**: TOP_K=1 이라 보통 1건 회수. 계약은 1문장(~80자)이라 토큰 영향 미미(§ "v1 토큰낭비 금지" 준수 범위). 룰·제약이 명시되지 않은 메모리(예: 단순 reference/사실 기록)면 충돌 판정 대상이 없어 자연 no-op. 회수 결과 dict shape 는 `{path,name,description,snippet,score,raw_cosine,source,provenance}` 로 **`type` 필드가 없다** → 조건부 렌더링은 hot-path 결과에 type 부착 + 양 포맷터 분기 + parity 테스트 복잡화를 부르는데, 절감 이득(1줄 토큰)이 그 위험보다 작다.
 - **대안 (기각)**: 회수된 메모리 `type ∈ {feedback, project}`일 때만 self-check 줄 렌더. 토큰 최소화는 되나 결과 shape 확장·양 포맷터 분기·parity 위험 증가로 ROI 낮음.
+- **★ audit R2E-1 정정 (2026-05-31 round 2)**: 초안은 "feedback·project 메모리의 명시 룰"로 **type 명칭**에 의존했으나, 회수 출력의 `[name]` 은 frontmatter title 이라 type 접두를 담지 않는다(실측: feedback_/project_ 파일 120건 중 94건=78% 의 렌더 name 에 'feedback'/'project' 글자 부재). 즉 모델은 회수 메모리의 type 을 식별할 시각 신호가 대부분 없어, type 기반 scoping 의 "reference/user → 자연 no-op" 근거가 성립하지 않았다. 따라서 문구를 **content 기반**("위 회수 메모리에 명시된 룰·제약")으로 전환 — 회수 출력에 실제로 보이는 description/snippet 의 룰 내용으로 판단을 유도한다. no-op 은 "명시 룰·제약이 없으면" 분기로 보존(content-based, 작동 보장).
 
 ### D3. 계약 문구 (확정)
 
-기존 `CONTRACT` 끝에 1문장 append:
+기존 `CONTRACT` 끝에 1문장 append (audit R2E-1 후 content+이름 기반 확정):
 
-> 옵션·권장·다음 단계 제시 시 위 feedback·project 메모리의 명시 룰과 충돌하는 항목은 제거하거나 "회수 메모리 X 위반 가능성"으로 표기.
+> 옵션·권장·다음 단계 제시 시 위 회수 메모리에 명시된 룰·제약과 충돌하는 항목은 제거하거나 "회수 메모리 <이름> 위반 가능성"으로 표기.
 
 전체 `CONTRACT` (변경 후):
 
 ```
-답변 시작 전 한 줄로 "회수 노트: <위 메모리가 본 질문과 어떻게 관련되는가, 무관하면 '무관'>" 명시 출력 의무. 회수 fact 와 답변이 모순되면 즉시 표기. 옵션·권장·다음 단계 제시 시 위 feedback·project 메모리의 명시 룰과 충돌하는 항목은 제거하거나 "회수 메모리 X 위반 가능성"으로 표기.
+답변 시작 전 한 줄로 "회수 노트: <위 메모리가 본 질문과 어떻게 관련되는가, 무관하면 '무관'>" 명시 출력 의무. 회수 fact 와 답변이 모순되면 즉시 표기. 옵션·권장·다음 단계 제시 시 위 회수 메모리에 명시된 룰·제약과 충돌하는 항목은 제거하거나 "회수 메모리 <이름> 위반 가능성"으로 표기.
 ```
 
 - **근거**: [[recalled-memory-weight]]의 How-to-apply 3줄("옵션 제시/권장 path/다음 단계 제안 직전 cross-reference" + "위반 옵션 제거 또는 명시 표기")을 1문장으로 **계약 승격**. ①의 `출처:` 라벨이 바로 위에 있어 "신뢰 근거" 동반(spec §4.2② "①의 source 필드를 신뢰 근거로 활용 가능").
+- **★ audit R2E-1 정정**: 초안의 "feedback·project 메모리의 명시 룰" + "X" placeholder 를 (a) **content 기반** "위 회수 메모리에 명시된 룰·제약"(비가시 type 의존 제거, D2 참조), (b) **구체 placeholder** "회수 메모리 <이름> 위반 가능성"(기존 "회수 노트: <...>" 과 동일한 `<...>` 관례 — 모델이 위 `[name]` 을 채움; "X" 는 어느 메모리인지 비지정이라 비actionable) 으로 교체. 두 변경 모두 byte-parity 유지(양 포맷터 동시 수정 + parity 테스트 통과).
 - **불변식**: 기존 "회수 노트:" 문구와 "모순되면 즉시 표기" 는 그대로 둔다 (self_eval `RECALL_MARKER_RE`, `RECALL_INJECTION_HEADERS`, `RECALLED_NAME_RE` 회귀 흉터 보호).
 
 ### D4. strict cited 목표치 = **15%** (≈2× baseline 7.62%)
@@ -98,6 +100,7 @@
 
 - self-check 계약은 **prompt-level 의무**일 뿐 코드 강제가 아니다. 모델이 무시하면 검출은 `self_eval` 사후 측정으로만 가능(실시간 차단 불가).
 - strict cited 는 lower bound → 목표 미달이 곧 실패는 아님(의역 통합은 marker_only/unused 로 과소집계). 보조 지표(unused 감소)를 함께 본다.
+- **★ audit R2C-1 측정 범위 한계**: 게이트가 신뢰하는 `utilization_rate_strict` 는 **Layer-4 hook 회수(UserPromptSubmit)면만** 측정한다. compact 재주입(SessionStart)은 동일 CONTRACT 를 싣지만 측정에서 제외된다 — `_compact_metric` 은 `recalled_ids` 를 기록하지 않고, `RECALL_INJECTION_HEADERS` 가 compact intro 의 em-dash 변형("MEMORY CONTEXT — ")을 인식하지 않기 때문(둘 다 Phase1② 이전부터 존재하던 측정 인프라라 D6 "측정 로직 동결"에 따라 건드리지 않음). 게이트가 '효과적 회수' 를 **과대 인증**하지 않도록 gate 출력에 `scope: "layer4_hook_recall (compact 재주입 효과 미측정)"` 를 노출한다. 두 회수면 합산 측정은 Phase 2 후속(측정 인프라 변경 동반).
 
 ---
 

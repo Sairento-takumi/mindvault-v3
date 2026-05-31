@@ -390,3 +390,15 @@ python3 src/self_eval.py --recall-utilization --target 0.15 --source transcripts
 - 회수 임계값 자동 튜닝 (D6) — 영구 미구현.
 - CLAUDE.md "회수 알림 규칙" 보강 (D1 보조 옵션) — 형 승인 후 선택.
 - install.sh 재배포(계약 활성화)·GitHub push/tag/release — 형 승인 영역.
+
+---
+
+## Audit 후속 정정 (2026-05-31, round 2 다차원 adversarial 점검)
+
+머지 후 6+5개 렌즈 × 2인 독립검증 워크플로로 전체를 재점검. 코드 correctness/parity/integration 결함 0건, 아래 4건 정정(설계 doc 단일 진실원천은 본 plan 위 Task 코드블록이 아니라 `docs/specs/2026-05-31-phase1-effective-recall-design.md` 의 D2/D3/§3 — audit 후 갱신됨):
+
+- **R2E-1 (important)** — 계약의 `feedback·project` type-scoping 이 회수 출력에 비가시(렌더 `[name]` 은 frontmatter title, 78% 가 type 글자 부재). 계약을 **content+이름 기반**으로 재서술: `위 회수 메모리에 명시된 룰·제약` + `"회수 메모리 <이름> 위반 가능성"`(round-1 "X" placeholder 모호성도 동시 해결). 양 포맷터 동시 수정, byte-parity 유지. (`src/recall_core.py`, `hooks/memory-recall.py`, `tests/test_recall_core_parity.py`)
+- **R2C-1 (minor, disclosure)** — 게이트 `strict` 는 Layer-4 hook 회수면만 측정(compact 재주입 제외 — 측정 인프라가 Phase1② 이전부터의 한계, D6 동결). 게이트 출력에 `scope` 키 추가로 과대인증 방지 + 설계 §3 한계 명시. (`src/self_eval.py`)
+- **R2A-1 (minor)** — `--target nan/inf` 가 비-스펙 JSON(NaN/Infinity bare token) 출력. argparse `_target_arg` 로 [0,1] 유한 실수만 통과. (`src/self_eval.py`, `tests/test_self_eval.py`)
+- **R2-D-1 (minor, test 갭)** — D7 의 "compact 재주입이 CONTRACT 자동 전파" 주장에 직접 테스트 없음 → `test_self_check_clause_propagates_to_compact_intro` 추가(실제 `COMPACT_INTRO` 로 렌더 검증). (`tests/test_recall_core_parity.py`)
+- **R2C-2 (not-a-bug)** — 게이트가 `utilization_rate_strict` 를 재계산 없이 신뢰하는 설계가 dict incoherent 시 판정 뒤집힐 수 있으나, 유일 producer 인 `recall_utilization` 이 항상 coherent 산출 → shipped 경로 unreachable. 수정 안 함.
