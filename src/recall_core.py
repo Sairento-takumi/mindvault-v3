@@ -96,10 +96,12 @@ def format_memory_context(
             ref = sanitize(str(prov.get("source_ref") or "")[:8])
             cap = sanitize(str(prov.get("captured_at") or "")[:10])
             body.append(f"  출처: {sanitize(str(prov['source_type']))} {ref} {cap}".rstrip())
-        rv = r.get("reverify") or {}
+        rv = r.get("reverify")
+        rv = rv if isinstance(rv, dict) else {}
         if rv.get("status") == "stale":
-            note = sanitize(str(rv.get("note") or ""))
-            body.append(f"  재검증 필요: {note} (현행 코드/사실 대조 후 신뢰)".rstrip())
+            note = sanitize(str(rv.get("note") or "")).strip()
+            tail = f"{note} " if note else ""
+            body.append(f"  재검증 필요: {tail}(현행 코드/사실 대조 후 신뢰)")
         if snippet:
             body.append(f"  발췌: {snippet}")
     body.append("")

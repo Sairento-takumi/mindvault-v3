@@ -341,10 +341,12 @@ def _format_output(results: list[dict]) -> str:
             ref = _sanitize(str(prov.get("source_ref") or "")[:8])
             cap = _sanitize(str(prov.get("captured_at") or "")[:10])
             lines.append(f"  출처: {_sanitize(str(prov['source_type']))} {ref} {cap}".rstrip())
-        rv = r.get("reverify") or {}
+        rv = r.get("reverify")
+        rv = rv if isinstance(rv, dict) else {}
         if rv.get("status") == "stale":
-            note = _sanitize(str(rv.get("note") or ""))
-            lines.append(f"  재검증 필요: {note} (현행 코드/사실 대조 후 신뢰)".rstrip())
+            note = _sanitize(str(rv.get("note") or "")).strip()
+            tail = f"{note} " if note else ""
+            lines.append(f"  재검증 필요: {tail}(현행 코드/사실 대조 후 신뢰)")
         if snippet:
             lines.append(f"  발췌: {snippet}")
     lines.append("")
