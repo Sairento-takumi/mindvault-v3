@@ -126,6 +126,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = ap.parse_args(argv)
 
+    # bug-audit 2026-06-01 (backfill-negative-args): 음수 인자는 부분실행+크래시
+    # (--sleep<0 → time.sleep ValueError), 또는 조용한 오작동(--limit<0 → 최근 N건
+    # 누락, --last-hours<0 → cutoff 미래로 전부 필터 → 'no events' 오인). fire 전 거부.
+    if args.sleep < 0:
+        ap.error("--sleep must be non-negative")
+    if args.limit is not None and args.limit < 0:
+        ap.error("--limit must be non-negative")
+    if args.last_hours is not None and args.last_hours < 0:
+        ap.error("--last-hours must be positive")
+
     events = scan_missing(args.last_hours)
     if not events:
         print("debug.log 에 'jsonl missing' 이벤트 없음.")
@@ -148,7 +158,7 @@ def main(argv: list[str] | None = None) -> int:
         for full_sid, slot in hits:
             resolved.append((prefix, full_sid, slot, ts))
 
-    if args.limit:
+    if args.limit is not None:  # 0/None 구분 — --limit 0 은 0건 처리(falsy 버그 회피)
         resolved = resolved[: args.limit]
 
     print(f"scanned: {len(events)} events / {len(seen)} unique prefix")

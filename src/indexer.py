@@ -490,6 +490,13 @@ def incremental_index(
                     (sid, blob, now),
                 )
                 vec_updated += 1
+            else:
+                # bug-audit 2026-06-01 (session-vec-stale-on-update): 임베드 실패 시 기존
+                # 세션의 sessions_vec 를 그대로 두면, mtime 갱신으로 다음 incremental_index
+                # 가 skip + backfill 의 'session_id IS NULL' 필터도 present-but-stale 행을
+                # 못 잡아 body↔vec 가 영구 stale(옛 본문 임베딩으로 잘못된 semantic recall).
+                # 행을 제거해 NULL(missing) 로 되돌려 backfill 이 서버 복구 후 재충전하게 한다.
+                conn.execute("DELETE FROM sessions_vec WHERE session_id=?", (sid,))
             updated += 1
             # 매 1건 처리 후 commit — 메인 트랜잭션을 즉시 풀어 다음 iter의 임베딩
             # (sub-conn cache write 포함)과 hook write가 BUSY 없이 진행. WAL이라 부하 미미.

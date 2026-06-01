@@ -345,6 +345,11 @@ def scan_memories(
 def _read_sidecar_last_scan() -> Optional[float]:
     try:
         d = json.loads(_sidecar_path().read_text(encoding="utf-8"))
+        # bug-audit 2026-06-01 (reverify-nonentdict-sidecar): 손상 sidecar 가 비-dict
+        # (`[]`/`42`/`"x"`)면 d.get 이 AttributeError(미캐치 튜플)로 빠져나가 reverify
+        # scan 이 영구 skip. None 반환 → scan 재실행 → _write_sidecar 자가복구.
+        if not isinstance(d, dict):
+            return None
         return float(d.get("last_scan_epoch"))
     except (OSError, ValueError, TypeError):
         return None

@@ -60,6 +60,11 @@ def _debug(msg: str) -> None:
 _FTS_TOKEN_RE = re.compile(r"[가-힣A-Za-z0-9_]+")
 
 
+# bug-audit 2026-06-01 (fts5-reserved-keyword-leak): memory_search._fts_escape 와
+# parity — AND/OR/NOT/NEAR FTS5 연산자 bareword 누수 차단 (운영 15건+, 5/28~).
+_FTS5_RESERVED = frozenset({"AND", "OR", "NOT", "NEAR"})
+
+
 def fts_escape(query: str) -> str:
     """사용자 쿼리를 FTS5 MATCH 안전 문자열로 변환.
 
@@ -70,7 +75,11 @@ def fts_escape(query: str) -> str:
     positive 차단.
     """
     words = _FTS_TOKEN_RE.findall(query)
-    pat = [f"{w}*" for w in words if len(w) >= 2 and not w.isdigit()]
+    pat = [
+        (f'"{w}"*' if w.upper() in _FTS5_RESERVED else f"{w}*")
+        for w in words
+        if len(w) >= 2 and not w.isdigit()
+    ]
     if not pat:
         return '""'
     return " OR ".join(pat)
@@ -97,8 +106,12 @@ def call_gemma(prompt: str, max_tokens: int = 1500) -> str | None:
         choices = data.get("choices") or []
         if not choices:
             return None
-        content = (choices[0].get("message") or {}).get("content") or ""
-        content = content.strip()
+        # bug-audit 2026-06-01 (gemma-nonstr-content sibling): content-block 리스트 등
+        # 비-문자열 content 에 .strip() → AttributeError 가 recall() 의 broad except 에
+        # 'recall FATAL' 로 잡혀 sessions 회수가 통째로 0건이 된다(rerank/summary graceful
+        # degrade 무력화). str 만 통과 — contradiction_detector/memory_extractor 등과 parity.
+        raw = (choices[0].get("message") or {}).get("content")
+        content = (raw if isinstance(raw, str) else "").strip()
         return content or None
     except (TimeoutError, urllib.error.URLError, json.JSONDecodeError, OSError, ValueError) as e:
         # audit-2026-05-24: BaseException(KeyboardInterrupt/_Timeout) 은
@@ -267,7 +280,9 @@ def gemma_rerank(query: str, candidates: list[dict], k: int = 3) -> list[int]:
         idxs = [int(x.strip()) for x in m.group(1).split(",") if x.strip() != ""]
     except ValueError:
         return fallback
-    idxs = [i for i in idxs if 0 <= i < len(candidates)][:k]
+    # bug-audit 2026-06-01 (gemma-rerank-dup-index): LLM 이 [2,2,2] 같은 중복 인덱스를
+    # 내면 동일 세션이 중복 회수·중복 Gemma 요약된다. 순서 보존 dedup 후 절단.
+    idxs = list(dict.fromkeys(i for i in idxs if 0 <= i < len(candidates)))[:k]
     return idxs or fallback
 
 

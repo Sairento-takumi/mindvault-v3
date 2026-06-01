@@ -78,9 +78,12 @@ def _warning(drifted: list[str]) -> str:
     shown = ", ".join(drifted[:5]) + (f" 외 {n - 5}건" if n > 5 else "")
     remedy = f"cd {repo} && MV3_SYNC_ONLY=1 ./install.sh" if repo else "./install.sh 재실행"
     return (
-        f"⚠ MindVault 배포 drift 감지: repo src/ 가 배포본(~/.claude/scripts/mindvault)"
-        f"보다 앞섭니다 ({n}개: {shown}). 커밋이 미배포 상태일 수 있어 hook 이 옛 코드로"
-        f" 동작 중일 위험이 있습니다. 해결: {remedy}"
+        # bug-audit 2026-06-01 (drift-warning-direction): find_drift 는 sha 불일치만
+        # 판정(방향 모름). '앞섭니다' 단정 대신 방향 중립으로 안내.
+        f"⚠ MindVault 배포 drift 감지: repo src/ 와 배포본(~/.claude/scripts/mindvault)"
+        f" 내용이 불일치합니다 ({n}개: {shown}). 보통은 커밋이 미배포(hook 이 옛 코드 동작)"
+        f" 이지만 배포본을 직접 수정한 경우일 수도 있습니다(이때 src/ 가 진실원본)."
+        f" 해결(어느 방향이든 배포본을 src 에 일치): {remedy}"
     )
 
 

@@ -165,8 +165,11 @@ def _BLOCK_LIST_RE(key: str) -> re.Pattern:
     CRLF tolerated via the surrounding _split_frontmatter (\\r stripped there),
     but we also allow \\r before the newline defensively.
     """
+    # bug-audit 2026-06-01 (blocklist-space-item-leak): \S+ 는 공백 포함 항목
+    # (- some old memory)을 놓쳐 블록리스트 미탐지 → mutation 거부 가드를 뚫고
+    # 중복 inline 키 추가로 YAML 손상. \S[^\r\n]* 로 항목 나머지(공백 포함)까지 매칭.
     return re.compile(
-        rf"^{re.escape(key)}:[ \t]*\r?\n(\s+-\s+\S+(\s*\r?\n|\s*$))+",
+        rf"^{re.escape(key)}:[ \t]*\r?\n(\s+-\s+\S[^\r\n]*(\s*\r?\n|\s*$))+",
         re.MULTILINE,
     )
 

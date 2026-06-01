@@ -178,6 +178,11 @@ def main() -> int:
     ap.add_argument("--apply", action="store_true", help="실제 쓰기 (기본 dry-run)")
     a = ap.parse_args()
 
+    # bug-audit 2026-06-01 (provenance-missing-dir-silent): 경로 오타/미존재 시 glob 이
+    # 조용히 0건 반환 → '0건 성공'(exit 0)으로 오인. backfill 전에 존재 검사로 구분.
+    if not Path(a.memory_dir).is_dir():
+        ap.error(f"memory_dir not found: {a.memory_dir}")
+
     skipped: List[str] = []
     failed: List[str] = []
     n = backfill_dir(Path(a.memory_dir), dry_run=not a.apply, skipped=skipped, failed=failed)

@@ -111,7 +111,7 @@ def main(argv: list[str] | None = None) -> int:
     files = sorted(mem_dir.glob("*.md"))
     # Skip MEMORY.md (index, no frontmatter)
     files = [f for f in files if f.name != "MEMORY.md"]
-    if args.limit:
+    if args.limit is not None:  # bug-audit 2026-06-01: --limit 0 falsy 가드 → 전체 sweep 방지
         files = files[: args.limit]
 
     print(f"sweep target: {len(files)} memory files in {mem_dir}")

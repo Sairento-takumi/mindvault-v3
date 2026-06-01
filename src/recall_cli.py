@@ -55,10 +55,22 @@ def main() -> int:
         sys.stdout.write(json.dumps(out, ensure_ascii=False, default=str))
         return 0
 
+    # bug-audit 2026-06-01 (recall-cli-exit0-contract): docstring(line 13) 계약은
+    # "exit 항상 0, 실패 시 빈 결과". 그러나 검색 호출은 호출 시점에 memory_search
+    # (→numpy) 를 lazy import 하므로 numpy 없는 인터프리터(배포 /recall 가 Claude
+    # Bash 의 numpy-less python3 로 실행되는, hook 이 re-exec 로 방어하는 바로 그
+    # 컨텍스트)에서 ImportError 가 전파돼 비-0 + traceback 종료된다. source 별로
+    # 감싸 실패는 빈 결과로 흡수하고 계약대로 항상 0 을 보장한다.
     if args.source in ("memory", "both"):
-        out["memory"] = _search_memory(query, top_k=5)
+        try:
+            out["memory"] = _search_memory(query, top_k=5)
+        except Exception:  # noqa: BLE001
+            out["memory"] = []
     if args.source in ("sessions", "both"):
-        out["sessions"] = _search_sessions(query, top_k=3)
+        try:
+            out["sessions"] = _search_sessions(query, top_k=3)
+        except Exception:  # noqa: BLE001
+            out["sessions"] = []
 
     sys.stdout.write(json.dumps(out, ensure_ascii=False, default=str))
     return 0

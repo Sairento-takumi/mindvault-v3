@@ -265,6 +265,12 @@ def _collect_md_files(dirs: list[Path]) -> list[Path]:
     `_staged` 부분 일치로 제외.
     """
     out: list[Path] = []
+    # bug-audit 2026-06-01 (collect-md-dup-path-dataloss): dirs 에 동일 dir 가 중복
+    # (sources.json 에 DEFAULT 자동발견 슬롯을 add 하면 _extra_memory_dirs 가 DEFAULT
+    # 와의 교집합을 제거하지 않아 발생)되면 같은 .md 가 두 번 방출된다. 그러면
+    # dedup_cli._scan 이 단일 파일을 자기 자신과 'name-dup'으로 보고하고 cmd_merge 가
+    # canonical 을 자기삭제(영구 데이터 유실, ok:True). resolved path 로 단일 방출 보장.
+    seen: set = set()
     for d in dirs:
         if not d.is_dir():
             continue
@@ -282,6 +288,13 @@ def _collect_md_files(dirs: list[Path]) -> list[Path]:
             if not _safe_memory_path(p, dirs):
                 _debug(f"unsafe path skip: {p}")
                 continue
+            try:
+                rp = p.resolve()
+            except OSError:
+                rp = p
+            if rp in seen:
+                continue
+            seen.add(rp)
             out.append(p)
     return out
 
@@ -320,7 +333,10 @@ def _acquire_lock(db_path: Path | None = None):
     try:
         fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         return fh
-    except BlockingIOError:
+    except (BlockingIOError, OSError):
+        # bug-audit 2026-06-01 (lock-fd-leak): flock 는 BlockingIOError 외 OSError
+        # (EINTR/ENOLCK, advisory-lock 미지원 FS 의 EINVAL/EOPNOTSUPP)도 던진다.
+        # 그 경우에도 fh 를 닫아 fd 누수를 막는다(indexer._acquire_session_lock 과 대칭).
         fh.close()
         return None
 
@@ -396,8 +412,11 @@ def incremental_index(
                 if parsed is None:
                     continue
                 fm, body = parsed
-                name = (fm.get("name") or p.stem)
-                description = (fm.get("description") or "")
+                # bug-audit 2026-06-01 (indexer-nonstr-frontmatter-crash): description/name
+                # 이 비-문자열(YAML int/float/list/dict)이면 아래 .strip() 가 AttributeError
+                # 로 per-file 가드 없는 루프를 뚫고 인덱서 run 전체를 중단시킨다. str 강제.
+                name = str(fm.get("name") or p.stem)
+                description = str(fm.get("description") or "")
 
                 # Sprint 10: 임베딩(sub-conn embed_cache write 포함)을 메인 conn write 전에 수행.
                 # 이전 iter의 commit 직후라 메인 conn이 idle → sub-conn cache_put BUSY 회피.
