@@ -217,7 +217,10 @@ def cache_set(key: str, value: str) -> None:
         _debug(f"cache_set mkdir failed: {e}")
         return
     target = CACHE_DIR / f"{key}.txt"
-    tmp = target.with_suffix(".txt.tmp")
+    # bug-audit 2026-06-01 (cache-set-shared-tmp): 결정적 tmp 이름은 동일 key 를 쓰는
+    # 병렬 SessionStart 가 같은 파일에 interleave write → 손상 + replace/unlink race.
+    # PID 고유 tmp 로 writer 격리(alias_generator._save 의 PID-tmp 패턴과 동일).
+    tmp = CACHE_DIR / f"{key}.txt.{os.getpid()}.tmp"
     try:
         tmp.write_text(value)
         os.replace(tmp, target)

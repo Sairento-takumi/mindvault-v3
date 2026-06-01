@@ -270,9 +270,12 @@ def cmd_merge(name_key: str, dry_run: bool = False) -> int:
     )
     final_fm = (
         "---\n"
-        f"name: {canon_fm.get('name', canonical.stem)}\n"
-        f"description: {canon_fm.get('description', canon_fm.get('name', canonical.stem))}\n"
-        f"type: {canon_fm.get('type', 'project')}\n"
+        # bug-audit 2026-06-01 (dedup-multiline-fm-corrupt): name/description 이 멀티라인
+        # YAML 블록 스칼라면 raw 보간 시 frontmatter 라인이 깨진다. _serialize_fm_value 로
+        # 단일라인 정규화(memory_review_cli 의 _fm_oneline 과 동일 취지).
+        f"name: {_serialize_fm_value(canon_fm.get('name', canonical.stem))}\n"
+        f"description: {_serialize_fm_value(canon_fm.get('description', canon_fm.get('name', canonical.stem)))}\n"
+        f"type: {_serialize_fm_value(canon_fm.get('type', 'project'))}\n"  # bug-audit 2026-06-01: type 도 단일라인 정규화(name/desc sibling)
         f"{extra_lines}"
         "---\n\n"
         f"{merged_body.rstrip()}\n"

@@ -248,7 +248,10 @@ def _call_gemma_for_classify(prompt: str, max_tokens: int = 1536) -> str | None:
     try:
         with urllib.request.urlopen(req, timeout=GEMMA_TIMEOUT) as resp:
             data = json.loads(resp.read())
-    except (urllib.error.URLError, json.JSONDecodeError, OSError, TimeoutError) as e:
+    except (urllib.error.URLError, json.JSONDecodeError, UnicodeDecodeError, OSError, TimeoutError) as e:
+        # bug-audit 2026-06-01 (gemma-unicodedecode): max_tokens 경계에서 멀티바이트
+        # UTF-8 절단 시 json.loads(bytes) 가 UnicodeDecodeError(ValueError, JSONDecodeError 아님)
+        # 를 던져 캐치 튜플을 빠져나가 detect 루프를 중단시켰다. 튜플에 추가.
         _debug(f"gemma classify fail: {type(e).__name__}: {e}")
         return None
 
@@ -258,7 +261,13 @@ def _call_gemma_for_classify(prompt: str, max_tokens: int = 1536) -> str | None:
     message = choices[0].get("message")
     if not isinstance(message, dict):
         return None
-    content = (message.get("content") or "").strip()
+    raw_content = message.get("content")
+    if raw_content is not None and not isinstance(raw_content, str):
+        # bug-audit 2026-06-01 (gemma-nonstr-content): content-block 리스트 등 비-문자열
+        # content 에 .strip() 하면 AttributeError 가 detect 루프 전체를 중단시킨다.
+        _debug(f"gemma classify non-str content type={type(raw_content).__name__}")
+        return None
+    content = (raw_content or "").strip()
     if not content:
         # Reasoning models can burn the whole budget on CoT (message.reasoning)
         # and emit empty content with finish_reason=length. Without this log it

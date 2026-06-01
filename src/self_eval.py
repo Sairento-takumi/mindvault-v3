@@ -703,6 +703,7 @@ def analyze_recent(
     all_turns: list[dict] = []
     if use_cache:
         try:
+            sys.path.insert(0, str(Path(__file__).parent))  # bug-audit 2026-06-01 (selfeval-turns-cache-import sibling): src path 보장
             from turns_cache import get_turns_since  # noqa: WPS433
             all_turns = get_turns_since(since, projects_root=projects_root)
         except Exception as e:
@@ -1009,6 +1010,11 @@ def recall_utilization(
     all_turns: list[dict] = []
     if use_cache:
         try:
+            # bug-audit 2026-06-01 (selfeval-turns-cache-import): self_eval 가 src/ 가
+            # sys.path[0] 가 아닌 컨텍스트에서 호출되면 turns_cache import 가
+            # 'No module named turns_cache' 로 실패(운영 9건/5-31) → 캐시 최적화가
+            # 조용히 죽고 매번 느린 JSONL 풀스캔 폴백. sibling late-import 와 동일 패턴.
+            sys.path.insert(0, str(Path(__file__).parent))
             from turns_cache import get_turns_since  # noqa: WPS433
             all_turns = get_turns_since(since, projects_root=projects_root)
         except Exception as e:
@@ -1302,6 +1308,7 @@ def main() -> int:
     args = parser.parse_args()
     if args.rebuild_cache:
         try:
+            sys.path.insert(0, str(Path(__file__).parent))  # bug-audit 2026-06-01 (selfeval-turns-cache-import sibling): src path 보장
             from turns_cache import refresh_cache  # noqa: WPS433
             stat = refresh_cache(projects_root=args.projects_root, full=True)
             _debug(f"cache rebuild: {stat}")

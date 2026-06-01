@@ -215,7 +215,13 @@ def _call_gemma_intent(prompt_text: str) -> str | None:
         # mlx_lm.server 의 thinking-mode 응답은 message.content 가 빈 문자열이고
         # raw trace 가 message.reasoning 필드에만 들어간다 (max_tokens 가 작아
         # 라벨 도달 전에 토큰 소진되는 케이스). content 비면 reasoning fallback.
-        content = msg.get("content") or msg.get("reasoning") or ""
+        # bug-audit 2026-06-01 (gemma-nonstr-content sibling): content/reasoning 이
+        # 비-문자열이면 .strip() 이 AttributeError(except 튜플에 없음)로 hook 핫패스를
+        # 뚫는다. str 만 통과.
+        raw = msg.get("content")
+        if not isinstance(raw, str) or not raw:
+            raw = msg.get("reasoning")
+        content = raw if isinstance(raw, str) else ""
         return content.strip() or None
     except (
         TimeoutError,
@@ -353,6 +359,12 @@ def classify_with_gemma(prompt: str) -> IntentResult | None:
         return IntentResult(cached, 0.6, [f"gemma:{cached}"])
     # miss → 실제 호출
     raw = _call_gemma_intent(p)
+    if raw is None:
+        # bug-audit 2026-06-01 (intent-transient-negcache): timeout/서버다운/parse-fail/
+        # 빈응답(=call 미성공)을 'Gemma 가 other 라 응답'과 합쳐 7일 negative 캐시하면
+        # 일시 장애가 해당 prompt 의 Gemma 분류를 7일간 배제한다. 실패는 캐시 말고 재시도.
+        # genuine non-empty 응답(아래)만 negative 캐시 → perf 캐시 이점은 유지.
+        return None
     label = _normalize_gemma_label(raw)
     if label is None or label == "other":
         _gemma_cache_put(p, _GEMMA_NEGATIVE_SENTINEL)

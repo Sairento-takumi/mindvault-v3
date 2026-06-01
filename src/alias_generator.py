@@ -153,14 +153,20 @@ def _call_gemma(desc: str, body: str) -> list[str]:
     try:
         with urllib.request.urlopen(req, timeout=GEMMA_TIMEOUT) as resp:
             data = json.loads(resp.read())
-    except (TimeoutError, urllib.error.URLError, json.JSONDecodeError, OSError) as e:
+    except (TimeoutError, urllib.error.URLError, json.JSONDecodeError, UnicodeDecodeError, OSError) as e:
         _debug(f"gemma call fail: {type(e).__name__} {e}")
         return []
     choices = data.get("choices") or []
     if not choices:
         return []
     msg = choices[0].get("message") or {}
-    text = msg.get("content") or msg.get("reasoning") or ""
+    # bug-audit 2026-06-01 (gemma-nonstr-content sibling): thinking-mode 응답의
+    # content/reasoning 이 비-문자열(content-block 리스트 등)이면 _parse_aliases 의
+    # .splitlines() 가 AttributeError → alias_sync 전체 중단. str 만 통과시킨다.
+    raw = msg.get("content")
+    if not isinstance(raw, str) or not raw:
+        raw = msg.get("reasoning")
+    text = raw if isinstance(raw, str) else ""
     return _parse_aliases(text)
 
 
@@ -376,6 +382,10 @@ def generate(
         meta = _extract_memory_meta(md)
         if meta is None:
             stats["failed"] += 1
+            # bug-audit 2026-06-01 (alias-meta-fail-silent): 386 의 no-aliases 와 달리
+            # 여기엔 진단 로그가 없어 persistent failed=N 의 원인 파일을 알 수 없었다
+            # (frontmatter 없는 memory 가 매 SessionEnd 재시도, LLM 비용은 0). 파일명 기록.
+            _debug(f"alias meta extract fail (no frontmatter/name): {md.name}")
             continue
         name, desc, body = meta
         if provider == "claude":

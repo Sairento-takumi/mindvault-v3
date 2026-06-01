@@ -212,6 +212,11 @@ def _alias_boost_paths(query: str) -> set[str]:
 
 
 _FTS_TOKEN_RE = re.compile(r"[가-힣A-Za-z0-9_]+")
+# bug-audit 2026-06-01 (fts5-reserved-keyword-leak): AND/OR/NOT/NEAR 는 FTS5 의
+# boolean 연산자라 bareword 로 흘리면 'syntax error near "NOT"/"AND"' 발생
+# (운영 15건+, 5/28~). whitelist 정규식이 다른 special 문자는 차단하므로 이
+# 4개만 따옴표 phrase 로 감싸 리터럴 prefix 검색으로 강제. (search.fts_escape 와 parity)
+_FTS5_RESERVED = frozenset({"AND", "OR", "NOT", "NEAR"})
 
 
 def _fts_escape(query: str) -> str:
@@ -233,7 +238,11 @@ def _fts_escape(query: str) -> str:
     debug.log 67건 fail 누적. 알파넘 화이트리스트로 전환.
     """
     words = _FTS_TOKEN_RE.findall(query)
-    pat = [f"{w}*" for w in words if len(w) >= 2 and not w.isdigit()]
+    pat = [
+        (f'"{w}"*' if w.upper() in _FTS5_RESERVED else f"{w}*")
+        for w in words
+        if len(w) >= 2 and not w.isdigit()
+    ]
     if not pat:
         # 모든 토큰이 무효(공백·특수문자·1자·순수숫자) → 빈 매치
         return '""'

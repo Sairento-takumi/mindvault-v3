@@ -511,14 +511,35 @@ def cmd_approve(filename: str) -> int:
             except OSError:
                 pass
 
-        if INDEX_MD.is_file():
-            line = f"- [{meta.get('name', slug)}]({slug}.md) — {meta.get('reason', '')}\n"
-            existing = INDEX_MD.read_text(encoding="utf-8")
-            prefix = "" if existing.endswith("\n") else "\n"
-            with INDEX_MD.open("a", encoding="utf-8") as f:
-                f.write(prefix + line)
-
-        src.unlink()
+        # bug-audit 2026-06-01 (promote-nonatomic-orphan + rollback-symmetry): target 기록
+        # 후 INDEX append/src.unlink 실패 시 target 이 디스크에 남아 재시도가 'target
+        # exists' 로 영구 차단된다. 후속 단계 실패 시 target 을 롤백한다. 또한 INDEX append
+        # 후 src.unlink 가 실패하면 재시도 때 동일 인덱스 라인이 중복 append 되므로, INDEX
+        # 도 append 직전 상태로 함께 복원해 롤백을 대칭으로 만든다.
+        _index_before = (
+            INDEX_MD.read_text(encoding="utf-8") if INDEX_MD.is_file() else None
+        )
+        try:
+            if _index_before is not None:
+                # review-index-link-procedural-prefix: procedural 은 _procedural/ 하위로
+                # promote 되므로 인덱스 링크도 동일 상대경로여야 깨지지 않음.
+                _rel = os.path.relpath(target, INDEX_MD.parent)
+                line = f"- [{meta.get('name', slug)}]({_rel}) — {meta.get('reason', '')}\n"
+                prefix = "" if _index_before.endswith("\n") else "\n"
+                with INDEX_MD.open("a", encoding="utf-8") as f:
+                    f.write(prefix + line)
+            src.unlink()
+        except Exception:
+            try:
+                target.unlink(missing_ok=True)  # rollback orphan → 재시도 차단 해소
+            except OSError:
+                pass
+            if _index_before is not None:  # INDEX append 도 롤백 → 재시도 시 중복 라인 방지
+                try:
+                    INDEX_MD.write_text(_index_before, encoding="utf-8")
+                except OSError:
+                    pass
+            raise
 
         # Sprint 4: 새 메모리 즉시 임베딩 인덱싱 (실패해도 staged 작업은 성공)
         reindex_info: dict = {}

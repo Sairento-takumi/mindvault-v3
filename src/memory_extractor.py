@@ -277,9 +277,19 @@ def call_gemma(prompt: str, max_tokens: int = 1500) -> str | None:
         choices = data.get("choices") or []
         if not choices:
             return None
-        content = (choices[0].get("message") or {}).get("content") or ""
+        choice0 = choices[0]
+        # bug-audit 2026-06-01 (extractor-truncation-negcache): finish_reason=length 면
+        # 응답이 중간 절단돼 JSON 배열이 안 닫힌다. 이전엔 truncation 도 non-empty 절단
+        # 문자열로 반환돼 parse=[] → 빈 결과가 영구 negative 캐시(extractor-negcache-1
+        # 가드 우회). 절단은 '호출 실패'로 취급해 None 반환 → 빈 결과 캐시 차단·재시도.
+        if choice0.get("finish_reason") == "length":
+            _debug("gemma finish_reason=length (truncated) — treat as call fail")
+            return None
+        # non-str content(content-block 리스트 등) 방어 — .strip() AttributeError 회피.
+        raw = (choice0.get("message") or {}).get("content")
+        content = raw if isinstance(raw, str) else ""
         return content.strip() or None
-    except (TimeoutError, urllib.error.URLError, json.JSONDecodeError, OSError, ValueError) as e:
+    except (TimeoutError, urllib.error.URLError, json.JSONDecodeError, UnicodeDecodeError, OSError, ValueError) as e:
         # audit-2026-05-24: BaseException/_Timeout 은 의도적으로 전파.
         _debug(f"gemma fail: {type(e).__name__} {e}")
         return None
@@ -358,7 +368,10 @@ def _iter_balanced_arrays(text: str):
                     end = j
                     break
         if end < 0:
-            return  # 불균형 — 더 볼 후보 없음
+            # bug-audit 2026-06-01 (extractor-balanced-array-early-return): 선행 불균형
+            # '[' 뒤에 유효 배열이 올 수 있으므로 종료 대신 이 한 글자만 건너뛰고 계속.
+            i += 1
+            continue
         try:
             val = json.loads(text[i:end + 1])
             if isinstance(val, list):
