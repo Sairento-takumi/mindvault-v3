@@ -150,3 +150,23 @@ MV3_CR_SEARCH=1 python -m src.eval_gate --qrels evals/recall_qrels.json --baseli
 - 816 + 신규 테스트 green, T-A1(off 회귀 0)·T-B2/T-B6(게이트 양방향) 통과.
 - T-D1 코드참조 0 오류, T-D2 적대검증 2연속 결함 0 수렴.
 - T-A6 A/B 결과가 수치로 status.md에 기록(채택/유지 결정 포함).
+
+## 6. 구현 결과 (실측, 적대검증 수렴 후)
+
+전체: **920 passed, 2 skipped**(816 기존 + ~104 신규 = 기능 테스트 + 적대검증 26 회귀 테스트, 41 subtests). 회귀 0.
+
+| 파일 | 매핑 | 상태 |
+|---|---|---|
+| `tests/test_ranking_metrics.py` | T-B1 | ✅ |
+| `tests/test_eval_runner.py` | T-B1b·T-B3·T-B4 + expected_top1 membership | ✅ |
+| `tests/test_eval_gate.py` | T-B2·T-B5·T-B6 + 동적k·mrr fail-closed·use_ctx 가드·FP경계·비-dict baseline | ✅ (integration 1건 `MV3_RUN_EVAL_GATE=1` 시 통과) |
+| `tests/test_migration_v4.py` | T-A1 + 동시성(race-swallow·8thread) | ✅ |
+| `tests/test_cr_indexer.py` | T-A2 + degrade 내용·sanitize 변형 | ✅ |
+| `tests/test_cr_search.py` | T-A3 + 손상ctx 폴백·강화 use_ctx | ✅ |
+| `tests/test_cr_backfill.py` | T-A4 + off-refresh·embed-failure·인덱서 가드·락 직렬화 | ✅ |
+| (기존) `test_schema_v2.py`·`test_memory_recall_deprecated.py` | 회귀 갱신 | ✅ SCHEMA_VERSION 4·`_vec_top_k` use_ctx 시그니처 |
+
+- T-A1 off 회귀 0: ✅ (마이그레이션 nullable·column-가드 멱등, raw embedding 바이트 동일, off-mode 게이트 PASS).
+- T-B2/T-B6 게이트 양방향: ✅ (evaluate pass/fail/regression/improve/fail-closed + CLI exit 0/1/2 end-to-end 실측).
+- T-A6 A/B: ✅ **title·synopsis 양 티어 완전 동률**(off=CR-on, Δ=0) → A4 = CR 검색개선 0, 기본 off 유지(status.md §A/B).
+- T-D1 doc-lint: ✅ (참조 파일·식별자 0 MISSING). T-D2 적대검증: ✅ **2연속 결함 0 수렴**(R9+R10, status.md 라운드 로그) + codex 2-track 교차검증.
