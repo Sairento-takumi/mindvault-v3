@@ -45,7 +45,13 @@ if isinstance(_model, tuple):
 _tokenizer = load_tokenizer(MODEL_DIR)
 # Metal GPU command queue race 회피 (mlx_embeddings 모델 thread-safe 아님).
 _model_lock = threading.Lock()
-log.info("Arctic-ko ready on %s:%d", HOST, PORT)
+# mem-leak fix 2026-06-17: mlx buffer cache 는 요청마다 가변 seq_len 버퍼를 무제한
+# 캐싱한다. 임베딩은 입력 길이가 제각각이라 distinct shape 버퍼가 끝없이 쌓여 16시간에
+# phys_footprint 가 24GB 까지 누수했다(정상 baseline 748MB). cache 상한을 둬 초과분을
+# 즉시 반환시킨다. 512MB = 재할당 빈도와 메모리 사이 균형점(0 은 캐시 완전 비활성 →
+# 매 forward 재할당으로 느림). mlx 0.31.x: mx.set_cache_limit / mx.get_cache_memory.
+mx.set_cache_limit(512 * 1024 * 1024)
+log.info("Arctic-ko ready on %s:%d (cache_limit=512MB)", HOST, PORT)
 
 
 def embed(text: str, kind: str = "passage") -> list[float]:
@@ -92,7 +98,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path == "/health":
-            self._send_json(200, {"ok": True, "model": MODEL_LABEL, "dim": EMBED_DIM})
+            # 누수 재발 조기감지용 mlx 메모리 노출 (mem-leak fix 2026-06-17).
+            self._send_json(200, {
+                "ok": True, "model": MODEL_LABEL, "dim": EMBED_DIM,
+                "cache_mb": round(mx.get_cache_memory() / 1024 / 1024, 1),
+                "active_mb": round(mx.get_active_memory() / 1024 / 1024, 1),
+            })
             return
         self._send_json(404, {"error": "not found"})
 
