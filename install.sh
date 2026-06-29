@@ -289,7 +289,7 @@ GEMMA_PLIST_SRC="$REPO_DIR/plist/com.mindvault.gemma-mlx.plist"
 GEMMA_PLIST_TARGET="$GEMMA_LAUNCH_AGENTS/com.mindvault.gemma-mlx.plist"
 GEMMA_RUNNER_SRC="$REPO_DIR/scripts/gemma_server_runner.sh"
 GEMMA_RUNNER_TARGET="$GEMMA_SCRIPTS_DIR/gemma_server_runner.sh"
-GEMMA_MODEL_ID="mlx-community/gemma-4-e4b-it-4bit"
+GEMMA_MODEL_ID="mlx-community/gemma-4-26b-a4b-it-4bit"
 
 # v3.2.3 (#13) — fresh macOS 는 ~/Library/LaunchAgents 부재 가능.
 # 첫 plist deploy 직전 명시 생성 — set -e 가 ENOENT 로 abort 회피.
